@@ -1,0 +1,42 @@
+* text=auto eol=lf
+
+# Source
+*.cpp text eol=lf
+*.h   text eol=lf
+*.hpp text eol=lf
+*.cs  text eol=lf
+*.usf text eol=lf
+*.ush text eol=lf
+*.md  text eol=lf
+*.json text eol=lf
+*.ini  text eol=lf
+
+# UE descriptors
+*.uplugin  text eol=lf
+*.uproject text eol=lf
+*.Target.cs text eol=lf
+*.Build.cs  text eol=lf
+
+# Windows-only scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binaries (ThirdParty)
+*.dll binary
+*.lib binary
+*.exe binary
+*.so  binary
+*.dylib binary
+*.a   binary
+*.pdb binary
+
+# UE content / images
+*.uasset binary
+*.umap   binary
+*.png    binary
+*.jpg    binary
+*.tga    binary
+*.fbx    binary
+*.wav    binary
+*.ttf    binary
