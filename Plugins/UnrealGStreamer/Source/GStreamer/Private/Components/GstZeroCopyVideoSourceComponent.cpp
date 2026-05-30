@@ -6,6 +6,8 @@
 #include "ZeroCopy/IZeroCopyBackend.h"
 #include "GstAppSrcMetrics.h"
 
+#include "Engine/TextureRenderTarget2D.h"
+#include "TextureResource.h"
 #include "RenderingThread.h"
 #include "RHICommandList.h"
 #include "ClearQuad.h"
@@ -57,11 +59,21 @@ void UGstZeroCopyVideoSourceComponent::CbPipelineStart(IGstPipeline* Pipeline)
         return;
     }
 
-    FString Err;
-    if (!Backend->AllocSharedTexture(Width, Height, EGstZeroCopyFormat::BGRA8, SharedHandle, SharedTextureRHI, Err))
+    const bool bUseSource = (SourceRenderTarget != nullptr);
+
+    if (bUseSource)
     {
-        UE_LOG(LogGStreamer, Error, TEXT("AllocSharedTexture failed: %s"), *Err);
-        return;
+        Width = SourceRenderTarget->SizeX;
+        Height = SourceRenderTarget->SizeY;
+    }
+
+    {
+        FString Err;
+        if (!Backend->AllocSharedTexture(Width, Height, EGstZeroCopyFormat::BGRA8, SharedHandle, SharedTextureRHI, Err))
+        {
+            UE_LOG(LogGStreamer, Error, TEXT("AllocSharedTexture failed: %s"), *Err);
+            return;
+        }
     }
 
     AppSrc = IGstAppSrc::CreateInstance();
@@ -70,8 +82,7 @@ void UGstZeroCopyVideoSourceComponent::CbPipelineStart(IGstPipeline* Pipeline)
     {
         UE_LOG(LogGStreamer, Error, TEXT("AppSrc '%s' not found in pipeline"), *AppSrcName);
         GstSafeDestroy(AppSrc);
-        Backend->FreeSharedTexture(SharedHandle);
-        SharedHandle = {};
+        if (SharedHandle.IsValid()) { Backend->FreeSharedTexture(SharedHandle); SharedHandle = {}; }
         SharedTextureRHI.SafeRelease();
         return;
     }
@@ -87,7 +98,8 @@ void UGstZeroCopyVideoSourceComponent::CbPipelineStart(IGstPipeline* Pipeline)
     else
     {
         bCapsSet = true;
-        UE_LOG(LogGStreamer, Log, TEXT("ZeroCopy '%s' caps=%s"), *AppSrcName, *Caps);
+        UE_LOG(LogGStreamer, Log, TEXT("ZeroCopy '%s' caps=%s mode=%s"),
+            *AppSrcName, *Caps, bUseSource ? TEXT("SourceRT") : TEXT("Synthetic"));
     }
 
     Metrics = new FGstAppSrcMetrics();
@@ -108,36 +120,73 @@ void UGstZeroCopyVideoSourceComponent::TickComponent(float DeltaTime, ELevelTick
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-    if (!AppSrc || !Metrics || !SharedTextureRHI.IsValid() || !SharedHandle.IsValid()) return;
+    if (!AppSrc || !Metrics) return;
 
     IGstAppSrc* AppSrcCopy = AppSrc;
-    FZeroCopyTextureHandle HandleCopy = SharedHandle;
-    FTextureRHIRef TexCopy = SharedTextureRHI;
-    const int32 W = Width;
-    const int32 H = Height;
     const uint64 FrameIndex = Metrics->FrameIdAtomic.fetch_add(1) + 1;
 
-    ENQUEUE_RENDER_COMMAND(GstZcPushFrame)(
-        [AppSrcCopy, HandleCopy, TexCopy, W, H, FrameIndex](FRHICommandListImmediate& RHICmdList)
-        {
-            const float Hue = FMath::Fmod(FrameIndex / 60.0f, 1.0f);
-            const FLinearColor ClearColor = FLinearColor::MakeFromHSV8(
-                (uint8)(Hue * 255.0f), 200, 220);
+    if (!SharedTextureRHI.IsValid() || !SharedHandle.IsValid()) return;
 
-            RHICmdList.Transition(FRHITransitionInfo(TexCopy, ERHIAccess::Unknown, ERHIAccess::RTV));
-            FRHIRenderPassInfo RPInfo(TexCopy, ERenderTargetActions::DontLoad_Store);
-            RHICmdList.BeginRenderPass(RPInfo, TEXT("GstZcClear"));
-            RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, (float)W, (float)H, 1.0f);
-            DrawClearQuad(RHICmdList, ClearColor);
-            RHICmdList.EndRenderPass();
-            RHICmdList.Transition(FRHITransitionInfo(TexCopy, ERHIAccess::RTV, ERHIAccess::CopySrc));
+    FZeroCopyTextureHandle HandleCopy = SharedHandle;
+    FTextureRHIRef DstTex = SharedTextureRHI;
+    const int32 W = Width;
+    const int32 H = Height;
 
-            IZeroCopyBackend* Backend = IZeroCopyBackend::GetForCurrentPlatform();
-            if (!Backend) return;
-            void* GstMem = Backend->WrapAsGstMemory(HandleCopy, 0);
-            if (!GstMem) return;
-            AppSrcCopy->PushSharedBuffer(GstMem);
-        });
+    if (SourceRenderTarget)
+    {
+        FTextureResource* SrcRes = SourceRenderTarget->GetResource();
+        if (!SrcRes) return;
+        FTextureRHIRef SrcTex = SrcRes->GetTextureRHI();
+        if (!SrcTex.IsValid()) return;
+
+        ENQUEUE_RENDER_COMMAND(GstZcCopyAndPush)(
+            [AppSrcCopy, HandleCopy, SrcTex, DstTex](FRHICommandListImmediate& RHICmdList)
+            {
+                FRHITransitionInfo Pre[] = {
+                    FRHITransitionInfo(SrcTex, ERHIAccess::SRVMask, ERHIAccess::CopySrc),
+                    FRHITransitionInfo(DstTex, ERHIAccess::Unknown,  ERHIAccess::CopyDest),
+                };
+                RHICmdList.Transition(MakeArrayView(Pre, 2));
+
+                RHICmdList.CopyTexture(SrcTex, DstTex, FRHICopyTextureInfo());
+
+                FRHITransitionInfo Post[] = {
+                    FRHITransitionInfo(DstTex, ERHIAccess::CopyDest, ERHIAccess::CopySrc),
+                    FRHITransitionInfo(SrcTex, ERHIAccess::CopySrc,  ERHIAccess::SRVMask),
+                };
+                RHICmdList.Transition(MakeArrayView(Post, 2));
+
+                IZeroCopyBackend* Backend = IZeroCopyBackend::GetForCurrentPlatform();
+                if (!Backend) return;
+                void* GstMem = Backend->WrapExternalTextureAsGstMemoryWithFence(DstTex.GetReference(), RHICmdList);
+                if (!GstMem) return;
+                AppSrcCopy->PushSharedBuffer(GstMem);
+            });
+    }
+    else
+    {
+        ENQUEUE_RENDER_COMMAND(GstZcClearAndPush)(
+            [AppSrcCopy, HandleCopy, DstTex, W, H, FrameIndex](FRHICommandListImmediate& RHICmdList)
+            {
+                const float Hue = FMath::Fmod(FrameIndex / 60.0f, 1.0f);
+                const FLinearColor ClearColor = FLinearColor::MakeFromHSV8(
+                    (uint8)(Hue * 255.0f), 200, 220);
+
+                RHICmdList.Transition(FRHITransitionInfo(DstTex, ERHIAccess::Unknown, ERHIAccess::RTV));
+                FRHIRenderPassInfo RPInfo(DstTex, ERenderTargetActions::DontLoad_Store);
+                RHICmdList.BeginRenderPass(RPInfo, TEXT("GstZcClear"));
+                RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, (float)W, (float)H, 1.0f);
+                DrawClearQuad(RHICmdList, ClearColor);
+                RHICmdList.EndRenderPass();
+                RHICmdList.Transition(FRHITransitionInfo(DstTex, ERHIAccess::RTV, ERHIAccess::CopySrc));
+
+                IZeroCopyBackend* Backend = IZeroCopyBackend::GetForCurrentPlatform();
+                if (!Backend) return;
+                void* GstMem = Backend->WrapAsGstMemory(HandleCopy, 0);
+                if (!GstMem) return;
+                AppSrcCopy->PushSharedBuffer(GstMem);
+            });
+    }
 
     Metrics->FramesPushed.fetch_add(1);
     if (++FramesSinceLastLog >= MetricsLogIntervalFrames)

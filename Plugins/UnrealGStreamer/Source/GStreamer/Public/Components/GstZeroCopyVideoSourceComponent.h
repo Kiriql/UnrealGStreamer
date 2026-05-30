@@ -8,6 +8,7 @@
 
 class IGstPipeline;
 class IGstAppSrc;
+class UTextureRenderTarget2D;
 
 UCLASS(ClassGroup = (GStreamer), meta = (BlueprintSpawnableComponent))
 class GSTREAMER_API UGstZeroCopyVideoSourceComponent : public UGstElementComponent
@@ -37,6 +38,11 @@ public:
 
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1", ClampMax = "120"))
     int32 FrameRate = 25;
+
+    /** If set, wraps this RT's ID3D12Resource directly into GstMemory each frame (true zero-copy from SceneCapture).
+     *  If null, falls back to a synthetic HSV clear for pipeline debugging. */
+    UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite)
+    TObjectPtr<UTextureRenderTarget2D> SourceRenderTarget = nullptr;
 
     UPROPERTY(Category = "GStreamer|Metrics", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1"))
     int32 MetricsLogIntervalFrames = 60;

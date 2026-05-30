@@ -39,4 +39,11 @@ public:
     virtual uint64 SignalReady(FZeroCopyTextureHandle Handle) = 0;
 
     virtual void* WrapAsGstMemory(FZeroCopyTextureHandle Handle, uint64 FenceValue) = 0;
+
+    virtual void* WrapExternalTextureAsGstMemory(class FRHITexture* Texture) = 0;
+
+    /** Wraps an externally-owned FRHITexture and attaches a GPU fence the gst-side queue
+     *  will wait on before reading. Returns GstMemory* (opaque). */
+    virtual void* WrapExternalTextureAsGstMemoryWithFence(
+        class FRHITexture* Texture, class FRHICommandListImmediate& RHICmdList) = 0;
 };

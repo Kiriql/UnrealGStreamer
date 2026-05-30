@@ -54,6 +54,18 @@ extern "C" void* GstD3D12WrapResource(void* UeDeviceRaw, void* ResourceRaw, unsi
     return Mem;
 }
 
+extern "C" void* GstD3D12WrapResourceWithFence(
+    void* UeDeviceRaw, void* ResourceRaw, unsigned ArraySlice,
+    void* FenceRaw, unsigned long long FenceValue)
+{
+    void* MemRaw = GstD3D12WrapResource(UeDeviceRaw, ResourceRaw, ArraySlice);
+    if (!MemRaw || !FenceRaw) return MemRaw;
+    GstMemory* Mem = static_cast<GstMemory*>(MemRaw);
+    ID3D12Fence* Fence = static_cast<ID3D12Fence*>(FenceRaw);
+    gst_d3d12_memory_set_fence(GST_D3D12_MEMORY_CAST(Mem), Fence, (guint64)FenceValue, FALSE);
+    return MemRaw;
+}
+
 extern "C" void GstD3D12BridgeShutdown()
 {
     if (g_CachedDevice) { gst_object_unref(g_CachedDevice); g_CachedDevice = nullptr; }

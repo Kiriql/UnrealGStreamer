@@ -3,6 +3,7 @@
 
 #if PLATFORM_WINDOWS
 
+#include "RHICommandList.h"
 #include "ID3D12DynamicRHI.h"
 #include "Windows/AllowWindowsPlatformTypes.h"
 #include <d3d12.h>
@@ -13,6 +14,8 @@
 using Microsoft::WRL::ComPtr;
 
 extern "C" void* GstD3D12WrapResource(void* UeDeviceRaw, void* ResourceRaw, unsigned ArraySlice);
+extern "C" void* GstD3D12WrapResourceWithFence(void* UeDeviceRaw, void* ResourceRaw, unsigned ArraySlice,
+    void* FenceRaw, unsigned long long FenceValue);
 extern "C" void GstD3D12BridgeShutdown();
 
 namespace
@@ -174,6 +177,41 @@ public:
         FEntry* Entry = Handles.Find(Handle.Id);
         if (!Entry || !Entry->Resource || !Device) return nullptr;
         return GstD3D12WrapResource(Device, Entry->Resource, 0);
+    }
+
+    virtual void* WrapExternalTextureAsGstMemory(FRHITexture* Texture) override
+    {
+        if (!Texture || !Device || !DynamicRHI) return nullptr;
+        ID3D12Resource* Raw = DynamicRHI->RHIGetResource(Texture);
+        if (!Raw) return nullptr;
+        return GstD3D12WrapResource(Device, Raw, 0);
+    }
+
+    virtual void* WrapExternalTextureAsGstMemoryWithFence(FRHITexture* Texture, FRHICommandListImmediate& RHICmdList) override
+    {
+        if (!Texture || !Device || !DynamicRHI || !Fence) return nullptr;
+        ID3D12Resource* Raw = DynamicRHI->RHIGetResource(Texture);
+        if (!Raw) return nullptr;
+        const uint64 FV = ++FenceValue;
+        ID3D12Fence* FenceRaw = Fence.Get();
+        RHICmdList.EnqueueLambda([DynRHI = DynamicRHI, FenceRaw, FV](FRHICommandListBase&)
+        {
+            DynRHI->RHIRunOnQueue(ED3D12RHIRunOnQueueType::Graphics,
+                [FenceRaw, FV](ID3D12CommandQueue* Queue)
+                {
+                    const HRESULT Hr = Queue->Signal(FenceRaw, FV);
+                    if (FAILED(Hr))
+                    {
+                        UE_LOG(LogGStreamer, Error, TEXT("Queue->Signal failed: 0x%08x fv=%llu"),
+                            Hr, (unsigned long long)FV);
+                    }
+                },
+                false);
+        });
+        void* Mem = GstD3D12WrapResourceWithFence(Device, Raw, 0, FenceRaw, (unsigned long long)FV);
+        if (!Mem) UE_LOG(LogGStreamer, Error, TEXT("GstD3D12WrapResourceWithFence returned null fv=%llu"),
+            (unsigned long long)FV);
+        return Mem;
     }
 
 private:
