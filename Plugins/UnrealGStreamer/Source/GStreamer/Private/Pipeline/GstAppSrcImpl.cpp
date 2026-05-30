@@ -18,6 +18,7 @@ public:
     virtual void Disconnect() override;
     virtual bool SetCaps(const char* CapsString) override;
     virtual bool PushBuffer(IGstAppSrcBuffer* Buffer) override;
+    virtual bool PushSharedBuffer(void* GstMemoryRaw) override;
 
 private:
     std::string m_Name;
@@ -116,6 +117,28 @@ bool FGstAppSrcImpl::PushBuffer(IGstAppSrcBuffer* Buffer)
     if (Result != GST_FLOW_OK)
     {
         g_printerr("[GstAppSrc][%s] push_buffer failed: %d (%s)\n",
+            m_Name.c_str(), (int)Result, gst_flow_get_name(Result));
+        return false;
+    }
+    return true;
+}
+
+bool FGstAppSrcImpl::PushSharedBuffer(void* GstMemoryRaw)
+{
+    if (!m_AppSrc || !GstMemoryRaw)
+    {
+        if (GstMemoryRaw) gst_memory_unref(static_cast<GstMemory*>(GstMemoryRaw));
+        return false;
+    }
+
+    GstMemory* Mem = static_cast<GstMemory*>(GstMemoryRaw);
+    GstBuffer* BufferObj = gst_buffer_new();
+    gst_buffer_append_memory(BufferObj, Mem);
+
+    const GstFlowReturn Result = gst_app_src_push_buffer(GST_APP_SRC(m_AppSrc), BufferObj);
+    if (Result != GST_FLOW_OK)
+    {
+        g_printerr("[GstAppSrc][%s] push_shared_buffer failed: %d (%s)\n",
             m_Name.c_str(), (int)Result, gst_flow_get_name(Result));
         return false;
     }

@@ -2,11 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "Components/GstElementComponent.h"
+#include "RHIResources.h"
+#include "ZeroCopy/IZeroCopyBackend.h"
 #include "GstZeroCopyVideoSourceComponent.generated.h"
 
 class IGstPipeline;
 class IGstAppSrc;
-class UTextureRenderTarget2D;
 
 UCLASS(ClassGroup = (GStreamer), meta = (BlueprintSpawnableComponent))
 class GSTREAMER_API UGstZeroCopyVideoSourceComponent : public UGstElementComponent
@@ -28,17 +29,14 @@ public:
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite)
     bool AppSrcEnabled = true;
 
-    UPROPERTY(Category = "GStreamer", EditAnywhere)
-    TArray<FComponentReference> AppSrcCaptures;
-
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "64", ClampMax = "8192"))
     int32 Width = 1920;
 
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "64", ClampMax = "8192"))
     int32 Height = 1080;
 
-    UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1", ClampMax = "8"))
-    int32 PoolSize = 2;
+    UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1", ClampMax = "120"))
+    int32 FrameRate = 25;
 
     UPROPERTY(Category = "GStreamer|Metrics", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1"))
     int32 MetricsLogIntervalFrames = 60;
@@ -46,17 +44,13 @@ public:
     UFUNCTION(Category = "GStreamer", BlueprintCallable)
     void SetCaptureInterval(float Interval);
 
-    UFUNCTION(Category = "GStreamer", BlueprintCallable)
-    UTextureRenderTarget2D* GetSharedRenderTarget() const { return SharedRT; }
-
 protected:
     void ResetState();
-    void EnsurePool();
 
     IGstAppSrc* AppSrc = nullptr;
 
-    UPROPERTY(Transient)
-    TObjectPtr<UTextureRenderTarget2D> SharedRT = nullptr;
+    FZeroCopyTextureHandle SharedHandle;
+    FTextureRHIRef SharedTextureRHI;
 
     bool bCapsSet = false;
     int32 FramesSinceLastLog = 0;

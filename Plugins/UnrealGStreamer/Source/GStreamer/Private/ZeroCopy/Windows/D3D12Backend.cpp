@@ -12,6 +12,9 @@
 
 using Microsoft::WRL::ComPtr;
 
+extern "C" void* GstD3D12WrapResource(void* UeDeviceRaw, void* ResourceRaw, unsigned ArraySlice);
+extern "C" void GstD3D12BridgeShutdown();
+
 namespace
 {
     DXGI_FORMAT ToDxgi(EGstZeroCopyFormat F)
@@ -77,6 +80,7 @@ public:
         Fence.Reset();
         Device = nullptr;
         DynamicRHI = nullptr;
+        GstD3D12BridgeShutdown();
     }
 
     virtual bool AllocSharedTexture(int32 Width, int32 Height, EGstZeroCopyFormat Format,
@@ -165,10 +169,11 @@ public:
         return ++FenceValue;
     }
 
-    virtual void* WrapAsGstMemory(FZeroCopyTextureHandle, uint64) override
+    virtual void* WrapAsGstMemory(FZeroCopyTextureHandle Handle, uint64 /*FenceValue*/) override
     {
-        // TODO next task: wrap via gst_d3d12_allocator_alloc_wrapped.
-        return nullptr;
+        FEntry* Entry = Handles.Find(Handle.Id);
+        if (!Entry || !Entry->Resource || !Device) return nullptr;
+        return GstD3D12WrapResource(Device, Entry->Resource, 0);
     }
 
 private:
