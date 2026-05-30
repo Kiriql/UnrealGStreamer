@@ -25,6 +25,13 @@ public class GStreamer : ModuleRules
 
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
+			PrivateDependencyModuleNames.Add("D3D12RHI");
+			AddEngineThirdPartyPrivateStaticDependencies(Target, "DX12");
+			PublicSystemLibraries.AddRange(new string[] { "d3d12.lib", "dxgi.lib" });
+		}
+
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
 			SetupGStreamerWin64();
 		}
 	}
