@@ -39,6 +39,25 @@ The host project (`GStreamerProject`) is a thin shell used to develop and test t
 ## What works today
 
 - `GStreamer` runtime module loads on UE startup, delay-loads the bundled GStreamer DLLs, sets the plugin search path, calls `gst_init`, and reports the runtime version and available plugins in the `LogGStreamer` log category.
+- Send copy-path components: `UGstPipelineComponent` (builds a pipeline from a `gst-launch`-style string) and `UGstAppSrcComponent` (reads a `SceneCaptureComponent2D`'s render target back to CPU and pushes the BGRA buffer into an `appsrc`). This is the baseline path that will later be compared against zero-copy.
+
+## Performance baseline (copy path)
+
+The send copy-path measures the cost of going GPU → CPU → GStreamer. `UGstAppSrcComponent` instruments every frame and emits a heartbeat line into `LogGStreamer` every `MetricsLogIntervalFrames` ticks (default 60). What is measured:
+
+- `readback` — wall time from `RHICmdList.ReadSurfaceData` enqueue to `FRenderCommandFence` completion (ms, mean + p95 over a rolling 60-frame window).
+- `push` — wall time spent inside `gst_app_src_push_buffer` (ms, mean + p95).
+- `fps` — derived from intervals between component ticks.
+- `queue=cur/max` — peak depth of the in-flight readback queue within the window, against `MaxQueueLength`.
+- `pushed` / `dropped` — cumulative counters. `dropped` increments when the in-flight queue is full at submit time.
+
+Example log line:
+
+```
+LogGStreamer: Verbose: copy-path: fps=24.9 readback=8.31ms p95=12.10 push=0.41ms p95=0.62 queue=2/5 pushed=600 dropped=0
+```
+
+Concrete numbers on a reference scene will be added once the zero-copy path is in place for direct comparison.
 
 ## License
 

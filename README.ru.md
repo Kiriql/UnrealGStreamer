@@ -39,6 +39,25 @@ Host-проект (`GStreamerProject`) — тонкая обёртка для р
 ## Что работает сейчас
 
 - Runtime-модуль `GStreamer` подгружается при старте UE, делейлоадит bundled GStreamer-DLL, устанавливает путь к плагинам, вызывает `gst_init` и логирует версию рантайма и найденные плагины в категорию `LogGStreamer`.
+- Send copy-path компоненты: `UGstPipelineComponent` (собирает пайплайн из `gst-launch`-строки) и `UGstAppSrcComponent` (читает render target из `SceneCaptureComponent2D` обратно в CPU и пушит BGRA-буфер в `appsrc`). Это baseline-путь, с которым потом будем сравнивать zero-copy.
+
+## Performance baseline (copy path)
+
+Send copy-path измеряет стоимость пути GPU → CPU → GStreamer. `UGstAppSrcComponent` инструментирует каждый кадр и раз в `MetricsLogIntervalFrames` тиков (по умолчанию 60) пишет heartbeat-строку в `LogGStreamer`. Что измеряется:
+
+- `readback` — wall-clock от постановки `RHICmdList.ReadSurfaceData` в очередь до завершения `FRenderCommandFence` (мс, mean + p95 по скользящему окну в 60 кадров).
+- `push` — wall-clock внутри `gst_app_src_push_buffer` (мс, mean + p95).
+- `fps` — по интервалам между тиками компонента.
+- `queue=cur/max` — пиковая глубина очереди ожидающих readback'ов в окне, против `MaxQueueLength`.
+- `pushed` / `dropped` — кумулятивные счётчики. `dropped` инкрементируется когда очередь полна на момент сабмита.
+
+Пример строки в логе:
+
+```
+LogGStreamer: Verbose: copy-path: fps=24.9 readback=8.31ms p95=12.10 push=0.41ms p95=0.62 queue=2/5 pushed=600 dropped=0
+```
+
+Конкретные числа на референсной сцене появятся после готовности zero-copy пути — для прямого сравнения.
 
 ## Лицензия
 
