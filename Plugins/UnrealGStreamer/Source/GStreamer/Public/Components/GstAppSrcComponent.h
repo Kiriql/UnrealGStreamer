@@ -58,4 +58,5 @@ protected:
     class FGstAppSrcMetrics* Metrics = nullptr;
     double LastTickWallSeconds = 0.0;
     int32 FramesSinceLastLog = 0;
+    bool bCapsSet = false;
 };

@@ -43,10 +43,11 @@ Host-проект (`GStreamerProject`) — тонкая обёртка для р
 
 ## Performance baseline (copy path)
 
-Send copy-path измеряет стоимость пути GPU → CPU → GStreamer. `UGstAppSrcComponent` инструментирует каждый кадр и раз в `MetricsLogIntervalFrames` тиков (по умолчанию 60) пишет heartbeat-строку в `LogGStreamer`. Что измеряется:
+Send copy-path измеряет стоимость пути GPU → CPU → GStreamer. `UGstAppSrcComponent` инструментирует каждый кадр и раз в `MetricsLogIntervalFrames` тиков (по умолчанию 60) пишет heartbeat-строку в `LogGStreamer`. Метрики (mean + p95 по скользящему окну 60 кадров):
 
-- `readback` — wall-clock от постановки `RHICmdList.ReadSurfaceData` в очередь до завершения `FRenderCommandFence` (мс, mean + p95 по скользящему окну в 60 кадров).
-- `push` — wall-clock внутри `gst_app_src_push_buffer` (мс, mean + p95).
+- `gpu` — чистое время `RHICmdList.ReadSurfaceData`, замер на render thread внутри enqueue'нутой команды. Это стоимость, которую должен убрать zero-copy.
+- `e2e` — end-to-end latency от сабмита на game thread до `gst_app_src_push_buffer`. Сейчас в основном — интервал опроса fence'а (компонент проверяет `IsFenceComplete` раз в свой тик).
+- `push` — wall-clock внутри `gst_app_src_push_buffer`.
 - `fps` — по интервалам между тиками компонента.
 - `queue=cur/max` — пиковая глубина очереди ожидающих readback'ов в окне, против `MaxQueueLength`.
 - `pushed` / `dropped` — кумулятивные счётчики. `dropped` инкрементируется когда очередь полна на момент сабмита.
@@ -54,10 +55,12 @@ Send copy-path измеряет стоимость пути GPU → CPU → GStr
 Пример строки в логе:
 
 ```
-LogGStreamer: Verbose: copy-path: fps=24.9 readback=8.31ms p95=12.10 push=0.41ms p95=0.62 queue=2/5 pushed=600 dropped=0
+LogGStreamer: copy-path: fps=25.0 gpu=14.5ms p95=15.7 e2e=80.0ms p95=84.5 push=0.01ms p95=0.02 queue=2/5 pushed=600 dropped=0
 ```
 
-Конкретные числа на референсной сцене появятся после готовности zero-copy пути — для прямого сравнения.
+Референсные числа (1920×1080 BGRA, NVIDIA RTX 4070 SUPER, Windows 11, UE 5.7, TickInterval = 1/25): `gpu ≈ 14–15мс`, `push ≈ 0.01мс`. Конкретное сравнение появится когда будет zero-copy путь.
+
+Plain-C log bridge перенаправляет внутренний debug-вывод GStreamer в `LogGStreamer` — ошибки пайплайна, warnings, фейлы регистрации плагинов видны в обычном логе UE.
 
 ## Лицензия
 

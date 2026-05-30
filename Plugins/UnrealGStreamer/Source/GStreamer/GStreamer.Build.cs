@@ -66,6 +66,11 @@ public class GStreamer : ModuleRules
 			"gstaudio-1.0-0.dll",
 			"gstpbutils-1.0-0.dll",
 			"gsttag-1.0-0.dll",
+			"gstcodecparsers-1.0-0.dll",
+			"gstcodecs-1.0-0.dll",
+			"gstd3dshader-1.0-0.dll",
+			"gstd3d11-1.0-0.dll",
+			"gstdxva-1.0-0.dll",
 			"gobject-2.0-0.dll",
 			"glib-2.0-0.dll",
 			"gmodule-2.0-0.dll",
@@ -94,6 +99,8 @@ public class GStreamer : ModuleRules
 			"gstaudiotestsrc.dll",
 			"gstaudioconvert.dll",
 			"gstaudioresample.dll",
+			"gstautodetect.dll",
+			"gstd3d11.dll",
 		};
 		string PluginsBin = Path.Combine(BinRoot, "gstreamer-1.0");
 		foreach (string GstPlugin in GstPluginNames)

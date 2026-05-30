@@ -19,7 +19,7 @@ public:
     virtual void UninitializeComponent() override;
 
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite, meta = (MultiLine = true))
-    FString PipelineConfig = TEXT("appsrc name=ueapp is-live=true format=time ! videoconvert ! fakesink sync=false");
+    FString PipelineConfig = TEXT("appsrc name=ueapp is-live=true format=time ! videoconvert ! d3d11videosink sync=false");
 
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite)
     bool PipelineAutostart = true;

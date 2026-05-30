@@ -5,6 +5,18 @@
 namespace
 {
 	bool g_inited = false;
+	GstCore::FLogCallback g_log_cb = nullptr;
+
+	void GstLogFunc(GstDebugCategory* Category, GstDebugLevel Level,
+		const gchar* File, const gchar* Function, gint Line,
+		GObject* /*Object*/, GstDebugMessage* Message, gpointer /*UserData*/)
+	{
+		if (!g_log_cb) return;
+		const char* CatName = Category ? gst_debug_category_get_name(Category) : "";
+		const char* Msg = gst_debug_message_get(Message);
+		g_log_cb((int)Level, CatName ? CatName : "", File ? File : "", (int)Line,
+			Function ? Function : "", Msg ? Msg : "");
+	}
 
 	void SafeCopy(char* Dst, size_t Sz, const char* Src)
 	{
@@ -58,6 +70,16 @@ namespace GstCore
 		V.Micro = static_cast<uint32_t>(Mic);
 		V.Nano  = static_cast<uint32_t>(Nan);
 		return V;
+	}
+
+	void SetLogCallback(FLogCallback Cb)
+	{
+		g_log_cb = Cb;
+		if (Cb)
+		{
+			gst_debug_remove_log_function(gst_debug_log_default);
+			gst_debug_add_log_function(GstLogFunc, nullptr, nullptr);
+		}
 	}
 
 	bool IsPluginAvailable(const char* Name, char* OutVersionBuf, size_t VersionBufSize)

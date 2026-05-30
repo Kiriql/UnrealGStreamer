@@ -10,6 +10,21 @@
 
 DEFINE_LOG_CATEGORY(LogGStreamer);
 
+static void GstLogBridge(int Level, const char* Category, const char* /*File*/, int /*Line*/, const char* /*Function*/, const char* Message)
+{
+	// GstDebugLevel: 1=ERROR, 2=WARNING, 3=FIXME, 4=INFO, 5=DEBUG, 6=LOG, 7=TRACE, 8=MEMDUMP
+	const FString Cat(UTF8_TO_TCHAR(Category));
+	const FString Msg(UTF8_TO_TCHAR(Message));
+	switch (Level)
+	{
+	case 1: UE_LOG(LogGStreamer, Error,   TEXT("[%s] %s"), *Cat, *Msg); break;
+	case 2: UE_LOG(LogGStreamer, Warning, TEXT("[%s] %s"), *Cat, *Msg); break;
+	case 3: UE_LOG(LogGStreamer, Warning, TEXT("[FIXME][%s] %s"), *Cat, *Msg); break;
+	case 4: UE_LOG(LogGStreamer, Log,     TEXT("[%s] %s"), *Cat, *Msg); break;
+	default: UE_LOG(LogGStreamer, Verbose, TEXT("[%s] %s"), *Cat, *Msg); break;
+	}
+}
+
 namespace
 {
 	const TCHAR* const GBundledDllNames[] =
@@ -30,6 +45,11 @@ namespace
 		TEXT("gstaudio-1.0-0.dll"),
 		TEXT("gstpbutils-1.0-0.dll"),
 		TEXT("gsttag-1.0-0.dll"),
+		TEXT("gstcodecparsers-1.0-0.dll"),
+		TEXT("gstcodecs-1.0-0.dll"),
+		TEXT("gstd3dshader-1.0-0.dll"),
+		TEXT("gstd3d11-1.0-0.dll"),
+		TEXT("gstdxva-1.0-0.dll"),
 	};
 
 	const char* const GRequiredGstPlugins[] =
@@ -78,6 +98,8 @@ public:
 
 		FPlatformMisc::SetEnvironmentVar(TEXT("GST_PLUGIN_SYSTEM_PATH"), *GstPluginsDir);
 		FPlatformMisc::SetEnvironmentVar(TEXT("GST_PLUGIN_PATH"), *GstPluginsDir);
+
+		GstCore::SetLogCallback(&GstLogBridge);
 
 		char ErrBuf[512] = {};
 		if (!GstCore::Init(ErrBuf, sizeof(ErrBuf)))

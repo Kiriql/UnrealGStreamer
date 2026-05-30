@@ -43,10 +43,11 @@ The host project (`GStreamerProject`) is a thin shell used to develop and test t
 
 ## Performance baseline (copy path)
 
-The send copy-path measures the cost of going GPU → CPU → GStreamer. `UGstAppSrcComponent` instruments every frame and emits a heartbeat line into `LogGStreamer` every `MetricsLogIntervalFrames` ticks (default 60). What is measured:
+The send copy-path measures the cost of going GPU → CPU → GStreamer. `UGstAppSrcComponent` instruments every frame and emits a heartbeat line into `LogGStreamer` every `MetricsLogIntervalFrames` ticks (default 60). What is measured (mean + p95 over a rolling 60-frame window):
 
-- `readback` — wall time from `RHICmdList.ReadSurfaceData` enqueue to `FRenderCommandFence` completion (ms, mean + p95 over a rolling 60-frame window).
-- `push` — wall time spent inside `gst_app_src_push_buffer` (ms, mean + p95).
+- `gpu` — wall time of `RHICmdList.ReadSurfaceData` itself, measured on the render thread inside the enqueued command. This is the cost we want zero-copy to eliminate.
+- `e2e` — end-to-end latency from buffer submit on the game thread to `gst_app_src_push_buffer`. Currently dominated by the fence-polling interval (the component checks `FRenderCommandFence::IsFenceComplete` once per its own tick).
+- `push` — wall time spent inside `gst_app_src_push_buffer`.
 - `fps` — derived from intervals between component ticks.
 - `queue=cur/max` — peak depth of the in-flight readback queue within the window, against `MaxQueueLength`.
 - `pushed` / `dropped` — cumulative counters. `dropped` increments when the in-flight queue is full at submit time.
@@ -54,10 +55,12 @@ The send copy-path measures the cost of going GPU → CPU → GStreamer. `UGstAp
 Example log line:
 
 ```
-LogGStreamer: Verbose: copy-path: fps=24.9 readback=8.31ms p95=12.10 push=0.41ms p95=0.62 queue=2/5 pushed=600 dropped=0
+LogGStreamer: copy-path: fps=25.0 gpu=14.5ms p95=15.7 e2e=80.0ms p95=84.5 push=0.01ms p95=0.02 queue=2/5 pushed=600 dropped=0
 ```
 
-Concrete numbers on a reference scene will be added once the zero-copy path is in place for direct comparison.
+Reference numbers (1920×1080 BGRA, NVIDIA RTX 4070 SUPER, Windows 11, UE 5.7, default tick interval 1/25): `gpu ≈ 14–15ms`, `push ≈ 0.01ms`. Concrete comparisons will be added once the zero-copy path is in place.
+
+A plain-C log bridge forwards GStreamer's internal debug output into `LogGStreamer` so pipeline errors, warnings, and registration failures are visible in the standard UE log.
 
 ## License
 

@@ -23,6 +23,7 @@ public:
 
 	virtual bool Connect(IGstPipeline* Pipeline, const char* ElementName) = 0;
 	virtual void Disconnect() = 0;
+	virtual bool SetCaps(const char* CapsString) = 0;
 	virtual bool PushBuffer(IGstAppSrcBuffer* Buffer) = 0;
 
 protected:

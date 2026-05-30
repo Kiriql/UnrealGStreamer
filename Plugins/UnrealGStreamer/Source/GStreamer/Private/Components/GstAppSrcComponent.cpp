@@ -27,8 +27,9 @@ public:
     TArray<FColor> ColorBuffer;
     FRenderCommandFence Fence;
     uint64 FrameId = 0;
-    double ReadbackStartSeconds = 0.0;
-    double ReadbackMs = 0.0;
+    double SubmitWallSeconds = 0.0;
+    double GpuStartSeconds = 0.0;
+    double GpuEndSeconds = 0.0;
     int32 QueueDepthAtSubmit = 0;
 };
 
@@ -55,6 +56,7 @@ void UGstAppSrcComponent::ResetState()
     if (Metrics) { delete Metrics; Metrics = nullptr; }
     LastTickWallSeconds = 0.0;
     FramesSinceLastLog = 0;
+    bCapsSet = false;
 }
 
 void UGstAppSrcComponent::CbPipelineStart(IGstPipeline* Pipeline)
@@ -123,7 +125,11 @@ void UGstAppSrcComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
         {
             BufferQueue.RemoveAt(0);
 
-            Buffer->ReadbackMs = (FPlatformTime::Seconds() - Buffer->ReadbackStartSeconds) * 1000.0;
+            const double NowEnd = FPlatformTime::Seconds();
+            const double GpuMs = (Buffer->GpuEndSeconds > 0.0 && Buffer->GpuStartSeconds > 0.0)
+                ? (Buffer->GpuEndSeconds - Buffer->GpuStartSeconds) * 1000.0
+                : 0.0;
+            const double E2EMs = (NowEnd - Buffer->SubmitWallSeconds) * 1000.0;
 
             const double PushStart = FPlatformTime::Seconds();
             const bool bOk = AppSrc->PushBuffer(Buffer);
@@ -135,7 +141,8 @@ void UGstAppSrcComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
             }
 
             FFrameTimings T;
-            T.ReadbackMs = Buffer->ReadbackMs;
+            T.GpuReadbackMs = GpuMs;
+            T.EndToEndLatencyMs = E2EMs;
             T.PushMs = PushMs;
             T.FrameId = Buffer->FrameId;
             T.QueueDepthAtSubmit = Buffer->QueueDepthAtSubmit;
@@ -151,9 +158,11 @@ void UGstAppSrcComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
         const auto S = Metrics->Summarize();
         if (S.SampleCount > 0)
         {
-            UE_LOG(LogGStreamer, Verbose,
-                TEXT("copy-path: fps=%.1f readback=%.2fms p95=%.2f push=%.2fms p95=%.2f queue=%d/%d pushed=%llu dropped=%llu"),
-                S.Fps, S.ReadbackMeanMs, S.ReadbackP95Ms, S.PushMeanMs, S.PushP95Ms,
+            UE_LOG(LogGStreamer, Log,
+                TEXT("copy-path: fps=%.1f gpu=%.2fms p95=%.2f e2e=%.2fms p95=%.2f push=%.2fms p95=%.2f queue=%d/%d pushed=%llu dropped=%llu"),
+                S.Fps, S.GpuReadbackMeanMs, S.GpuReadbackP95Ms,
+                S.EndToEndMeanMs, S.EndToEndP95Ms,
+                S.PushMeanMs, S.PushP95Ms,
                 S.MaxQueueDepth, MaxQueueLength,
                 (unsigned long long)Metrics->FramesPushed.load(std::memory_order_relaxed),
                 (unsigned long long)Metrics->FramesDropped.load(std::memory_order_relaxed));
@@ -174,13 +183,33 @@ void UGstAppSrcComponent::PushBufferAsync(FTextureRenderTargetResource* TextureR
 
     const FIntPoint Size = TextureResource->GetSizeXY();
     const FIntRect InRect = FIntRect(0, 0, Size.X, Size.Y);
+
+    if (!bCapsSet)
+    {
+        const float TickInterval = PrimaryComponentTick.TickInterval > 0.0f ? PrimaryComponentTick.TickInterval : (1.0f / 25.0f);
+        const int32 FpsNum = FMath::Max(1, FMath::RoundToInt(1.0f / TickInterval));
+        FString CapsStr = FString::Printf(TEXT("video/x-raw,format=BGRA,width=%d,height=%d,framerate=%d/1"),
+            Size.X, Size.Y, FpsNum);
+        const FTCHARToUTF8 CapsUtf8(*CapsStr);
+        if (AppSrc->SetCaps(CapsUtf8.Get()))
+        {
+            UE_LOG(LogGStreamer, Log, TEXT("AppSrc caps set: %s"), *CapsStr);
+            bCapsSet = true;
+        }
+        else
+        {
+            UE_LOG(LogGStreamer, Error, TEXT("AppSrc SetCaps failed: %s"), *CapsStr);
+        }
+    }
     const FReadSurfaceDataFlags InFlags = FReadSurfaceDataFlags(RCM_UNorm, CubeFace_MAX);
 
     FGstAppSrcBuffer* Buffer = GetBuffer();
     Buffer->ColorBuffer.SetNum(Size.X * Size.Y);
     Buffer->FrameId = Metrics != nullptr ? Metrics->FrameIdAtomic.load(std::memory_order_relaxed) : 0;
     Buffer->QueueDepthAtSubmit = BufferQueue.Num();
-    Buffer->ReadbackStartSeconds = FPlatformTime::Seconds();
+    Buffer->SubmitWallSeconds = FPlatformTime::Seconds();
+    Buffer->GpuStartSeconds = 0.0;
+    Buffer->GpuEndSeconds = 0.0;
     BufferQueue.Add(Buffer);
 
     struct FReadSurfaceContext
@@ -196,11 +225,13 @@ void UGstAppSrcComponent::PushBufferAsync(FTextureRenderTargetResource* TextureR
     ENQUEUE_RENDER_COMMAND(GstReadSurfaceCommand)(
         [Context](FRHICommandListImmediate& RHICmdList)
         {
+            Context.Buffer->GpuStartSeconds = FPlatformTime::Seconds();
             RHICmdList.ReadSurfaceData(
                 Context.SrcRenderTarget->GetRenderTargetTexture(),
                 Context.Rect,
                 Context.Buffer->ColorBuffer,
                 Context.Flags);
+            Context.Buffer->GpuEndSeconds = FPlatformTime::Seconds();
         });
 
     Buffer->Fence.BeginFence();

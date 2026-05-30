@@ -16,6 +16,7 @@ public:
 
     virtual bool Connect(IGstPipeline* Pipeline, const char* ElementName) override;
     virtual void Disconnect() override;
+    virtual bool SetCaps(const char* CapsString) override;
     virtual bool PushBuffer(IGstAppSrcBuffer* Buffer) override;
 
 private:
@@ -70,6 +71,20 @@ void FGstAppSrcImpl::Disconnect()
         gst_object_unref(m_AppSrc);
         m_AppSrc = nullptr;
     }
+}
+
+bool FGstAppSrcImpl::SetCaps(const char* CapsString)
+{
+    if (!m_AppSrc || !CapsString) return false;
+    GstCaps* Caps = gst_caps_from_string(CapsString);
+    if (!Caps)
+    {
+        g_printerr("[GstAppSrc][%s] gst_caps_from_string failed for: %s\n", m_Name.c_str(), CapsString);
+        return false;
+    }
+    gst_app_src_set_caps(GST_APP_SRC(m_AppSrc), Caps);
+    gst_caps_unref(Caps);
+    return true;
 }
 
 static void DestroyNotifyHandler(gpointer Data)
