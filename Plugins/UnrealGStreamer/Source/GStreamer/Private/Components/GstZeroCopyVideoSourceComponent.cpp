@@ -121,16 +121,36 @@ void UGstZeroCopyVideoSourceComponent::TickComponent(float DeltaTime, ELevelTick
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
     if (!AppSrc || !Metrics) return;
-
-    IGstAppSrc* AppSrcCopy = AppSrc;
-    const uint64 FrameIndex = Metrics->FrameIdAtomic.fetch_add(1) + 1;
-
     if (!SharedTextureRHI.IsValid() || !SharedHandle.IsValid()) return;
 
+    Metrics->RecordWallTickSeconds(FPlatformTime::Seconds());
+
+    IGstAppSrc* AppSrcCopy = AppSrc;
+    FGstAppSrcMetrics* MetricsCopy = Metrics;
     FZeroCopyTextureHandle HandleCopy = SharedHandle;
     FTextureRHIRef DstTex = SharedTextureRHI;
     const int32 W = Width;
     const int32 H = Height;
+    const uint64 FrameIndex = Metrics->FrameIdAtomic.fetch_add(1) + 1;
+
+    auto FinalizeAndPush = [AppSrcCopy, MetricsCopy, FrameIndex](FRHICommandListImmediate& RHICmdList, FRHITexture* DstTexRaw)
+    {
+        IZeroCopyBackend* Backend = IZeroCopyBackend::GetForCurrentPlatform();
+        if (!Backend) return;
+        void* GstMem = Backend->WrapExternalTextureAsGstMemoryWithFence(DstTexRaw, RHICmdList);
+        if (!GstMem) return;
+
+        const double PushStart = FPlatformTime::Seconds();
+        const bool bOk = AppSrcCopy->PushSharedBuffer(GstMem);
+        const double PushMs = (FPlatformTime::Seconds() - PushStart) * 1000.0;
+
+        if (bOk) MetricsCopy->FramesPushed.fetch_add(1);
+
+        FFrameTimings T;
+        T.PushMs = PushMs;
+        T.FrameId = FrameIndex;
+        MetricsCopy->RecordFrame(T);
+    };
 
     if (SourceRenderTarget)
     {
@@ -140,7 +160,7 @@ void UGstZeroCopyVideoSourceComponent::TickComponent(float DeltaTime, ELevelTick
         if (!SrcTex.IsValid()) return;
 
         ENQUEUE_RENDER_COMMAND(GstZcCopyAndPush)(
-            [AppSrcCopy, HandleCopy, SrcTex, DstTex](FRHICommandListImmediate& RHICmdList)
+            [SrcTex, DstTex, FinalizeAndPush](FRHICommandListImmediate& RHICmdList)
             {
                 FRHITransitionInfo Pre[] = {
                     FRHITransitionInfo(SrcTex, ERHIAccess::SRVMask, ERHIAccess::CopySrc),
@@ -156,17 +176,13 @@ void UGstZeroCopyVideoSourceComponent::TickComponent(float DeltaTime, ELevelTick
                 };
                 RHICmdList.Transition(MakeArrayView(Post, 2));
 
-                IZeroCopyBackend* Backend = IZeroCopyBackend::GetForCurrentPlatform();
-                if (!Backend) return;
-                void* GstMem = Backend->WrapExternalTextureAsGstMemoryWithFence(DstTex.GetReference(), RHICmdList);
-                if (!GstMem) return;
-                AppSrcCopy->PushSharedBuffer(GstMem);
+                FinalizeAndPush(RHICmdList, DstTex.GetReference());
             });
     }
     else
     {
         ENQUEUE_RENDER_COMMAND(GstZcClearAndPush)(
-            [AppSrcCopy, HandleCopy, DstTex, W, H, FrameIndex](FRHICommandListImmediate& RHICmdList)
+            [DstTex, W, H, FrameIndex, FinalizeAndPush](FRHICommandListImmediate& RHICmdList)
             {
                 const float Hue = FMath::Fmod(FrameIndex / 60.0f, 1.0f);
                 const FLinearColor ClearColor = FLinearColor::MakeFromHSV8(
@@ -180,20 +196,21 @@ void UGstZeroCopyVideoSourceComponent::TickComponent(float DeltaTime, ELevelTick
                 RHICmdList.EndRenderPass();
                 RHICmdList.Transition(FRHITransitionInfo(DstTex, ERHIAccess::RTV, ERHIAccess::CopySrc));
 
-                IZeroCopyBackend* Backend = IZeroCopyBackend::GetForCurrentPlatform();
-                if (!Backend) return;
-                void* GstMem = Backend->WrapAsGstMemory(HandleCopy, 0);
-                if (!GstMem) return;
-                AppSrcCopy->PushSharedBuffer(GstMem);
+                FinalizeAndPush(RHICmdList, DstTex.GetReference());
             });
     }
 
-    Metrics->FramesPushed.fetch_add(1);
     if (++FramesSinceLastLog >= MetricsLogIntervalFrames)
     {
-        UE_LOG(LogGStreamer, Log, TEXT("zerocopy: pushed=%llu frame=%llu"),
-            (unsigned long long)Metrics->FramesPushed.load(),
-            (unsigned long long)FrameIndex);
         FramesSinceLastLog = 0;
+        const auto S = Metrics->Summarize();
+        if (S.SampleCount > 0)
+        {
+            const TCHAR* ModeStr = SourceRenderTarget ? TEXT("hybrid") : TEXT("synthetic");
+            UE_LOG(LogGStreamer, Log,
+                TEXT("%s: fps=%.1f push=%.3fms p95=%.3f pushed=%llu"),
+                ModeStr, S.Fps, S.PushMeanMs, S.PushP95Ms,
+                (unsigned long long)Metrics->FramesPushed.load());
+        }
     }
 }
