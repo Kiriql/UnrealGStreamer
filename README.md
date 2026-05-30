@@ -2,7 +2,7 @@
 
 Two-way GStreamer integration for Unreal Engine 5.7. Stream Unreal cameras into GStreamer pipelines and feed GStreamer media into Unreal textures.
 
-> **Status: early scaffolding.** The plugin currently loads the bundled GStreamer runtime and verifies required elements at startup. Source and sink components are not yet ported. Expect breaking changes.
+> **Status: early scaffolding.** Send copy-path is working on Windows. Send zero-copy (hybrid GPU-only) is working on Windows with D3D12. Receive components and additional platforms are not yet ported. Expect breaking changes.
 
 🇷🇺 [Русская версия](README.ru.md)
 
@@ -10,7 +10,7 @@ Two-way GStreamer integration for Unreal Engine 5.7. Stream Unreal cameras into 
 
 | Platform | Status |
 | --- | --- |
-| Windows 64 | Scaffold (current) |
+| Windows 64 | Send: copy-path + zero-copy (D3D12) |
 | Linux | Planned |
 | macOS | Planned |
 | Android | Planned |
@@ -39,18 +39,19 @@ The host project (`GStreamerProject`) is a thin shell used to develop and test t
 ## What works today
 
 - `GStreamer` runtime module loads on UE startup, delay-loads the bundled GStreamer DLLs, sets the plugin search path, calls `gst_init`, and reports the runtime version and available plugins in the `LogGStreamer` log category.
-- Send copy-path components: `UGstPipelineComponent` (builds a pipeline from a `gst-launch`-style string) and `UGstAppSrcComponent` (reads a `SceneCaptureComponent2D`'s render target back to CPU and pushes the BGRA buffer into an `appsrc`). This is the baseline path that will later be compared against zero-copy.
+- Send copy-path components: `UGstPipelineComponent` (builds a pipeline from a `gst-launch`-style string) and `UGstAppSrcComponent` (reads a `SceneCaptureComponent2D`'s render target back to CPU and pushes the BGRA buffer into an `appsrc`).
+- Send zero-copy component (Windows, D3D12): `UGstZeroCopyVideoSourceComponent`. Wraps GPU memory as `GstMemory` via the GStreamer `d3d12` plugin and pushes into `appsrc` with no CPU readback. See architecture below.
 
-## Performance baseline (copy path)
+## Send copy-path (baseline)
 
-The send copy-path measures the cost of going GPU → CPU → GStreamer. `UGstAppSrcComponent` instruments every frame and emits a heartbeat line into `LogGStreamer` every `MetricsLogIntervalFrames` ticks (default 60). What is measured (mean + p95 over a rolling 60-frame window):
+`UGstAppSrcComponent` measures the cost of going GPU → CPU → GStreamer and emits a heartbeat line into `LogGStreamer` every `MetricsLogIntervalFrames` ticks (default 60). What is measured (mean + p95 over a rolling 60-frame window):
 
-- `gpu` — wall time of `RHICmdList.ReadSurfaceData` itself, measured on the render thread inside the enqueued command. This is the cost we want zero-copy to eliminate.
+- `gpu` — wall time of `RHICmdList.ReadSurfaceData` itself, measured on the render thread inside the enqueued command.
 - `e2e` — end-to-end latency from buffer submit on the game thread to `gst_app_src_push_buffer`. Currently dominated by the fence-polling interval (the component checks `FRenderCommandFence::IsFenceComplete` once per its own tick).
 - `push` — wall time spent inside `gst_app_src_push_buffer`.
 - `fps` — derived from intervals between component ticks.
 - `queue=cur/max` — peak depth of the in-flight readback queue within the window, against `MaxQueueLength`.
-- `pushed` / `dropped` — cumulative counters. `dropped` increments when the in-flight queue is full at submit time.
+- `pushed` / `dropped` — cumulative counters.
 
 Example log line:
 
@@ -58,9 +59,58 @@ Example log line:
 LogGStreamer: copy-path: fps=25.0 gpu=14.5ms p95=15.7 e2e=80.0ms p95=84.5 push=0.01ms p95=0.02 queue=2/5 pushed=600 dropped=0
 ```
 
-Reference numbers (1920×1080 BGRA, NVIDIA RTX 4070 SUPER, Windows 11, UE 5.7, default tick interval 1/25): `gpu ≈ 14–15ms`, `push ≈ 0.01ms`. Concrete comparisons will be added once the zero-copy path is in place.
+## Send zero-copy (Windows, D3D12)
 
-A plain-C log bridge forwards GStreamer's internal debug output into `LogGStreamer` so pipeline errors, warnings, and registration failures are visible in the standard UE log.
+`UGstZeroCopyVideoSourceComponent` keeps the frame on the GPU end-to-end: the only memory that crosses the UE → GStreamer boundary is a wrapped pointer to an existing `ID3D12Resource`, synchronized with the GStreamer queue through an `ID3D12Fence`. No `ReadSurfaceData`. No `memcpy`.
+
+### Architecture
+
+- `IZeroCopyBackend` (`Private/ZeroCopy/IZeroCopyBackend.h`) — platform-agnostic contract: `AllocSharedTexture`, `WrapExternalTextureAsGstMemoryWithFence`, `FreeSharedTexture`.
+- `FD3D12ZeroCopyBackend` (`Private/ZeroCopy/Windows/D3D12Backend.cpp`) — Windows implementation. Holds a single `ID3D12Fence` reused across frames, monotonically incremented per push.
+- `D3D12GstBridge.cpp` — separate translation unit (no UE headers, only `<gst/gst.h>` + `<gst/d3d12/gstd3d12.h>` + `<d3d12.h>`) that wraps an `ID3D12Resource` as `GstMemory` via `gst_d3d12_allocator_alloc_wrapped` and attaches the fence with `gst_d3d12_memory_set_fence`. UE/GStreamer headers stay in different TUs to avoid the `GError` symbol collision between glib and UE Core.
+- `UGstZeroCopyVideoSourceComponent` runs on Tick on the game thread, allocates a single shared `B8G8R8A8_UNORM` resource on pipeline start, then enqueues a render command per frame: transition source RT → CopySrc, transition shared → CopyDest, `RHICopyTexture(UE RT → shared)`, signal the fence on UE's graphics queue via `RHIRunOnQueue` + `ID3D12CommandQueue::Signal`, wrap the shared resource as `GstMemory` with that fence value, push.
+
+The component has two modes:
+
+- **`SourceRT` mode** — production mode. Bind a `UTextureRenderTarget2D` that some `USceneCaptureComponent2D` is rendering into, and the component will copy that RT into the shared resource each frame.
+- **Synthetic mode** — debugging mode used when `SourceRenderTarget` is null. The component draws a moving HSV color into the shared resource itself. Useful for verifying the GStreamer side of the pipeline without a scene capture.
+
+### Why one GPU copy, not literally zero
+
+The honest answer is that wrapping UE's own render target directly is not possible on UE 5.7 D3D12:
+
+- UE allocates all render targets as `B8G8R8A8_TYPELESS` for sRGB/linear view flexibility.
+- The pre-built SRV heap the GStreamer `d3d12` plugin builds inside `alloc_wrapped` is created with the resource's intrinsic format. D3D12 view validation rejects TYPELESS — invalid call, device removed.
+- The alternative — subclassing `FTextureRenderTarget2DResource` to inject a typed resource — is blocked by missing `ENGINE_API` exports on its constructor and several virtuals, so the linker can't satisfy the vtable from outside the Engine module.
+
+Both Epic's Pixel Streaming and the mature [Spout-DX12 plugin](https://github.com/GPUbrainStorm/UE5_Spout2_DX12) hit the same wall and made the same call: copy UE's RT into an owned, typed resource and hand that off. From the TensorWorks post-mortem on Pixel Streaming:
+
+> the nanosecond-scale cost saving observed in our testing doesn't warrant the added complexity of handling the case where NVENC fails to free up an active framebuffer in time for it to be drawn to
+
+Same conclusion here. The numbers below show why.
+
+### Baseline numbers
+
+Hardware: NVIDIA RTX 4070 SUPER, Windows 11, UE 5.7, GStreamer 1.28.3. Pipeline: `appsrc name=ueapp ! d3d12videosink sync=false`. Source: `SceneCaptureComponent2D` rendering 1920×1080 at 25 fps into a `UTextureRenderTarget2D`. Steady-state over ~30 seconds:
+
+| Metric | Copy-path | Zero-copy (hybrid) |
+| --- | --- | --- |
+| `gpu` (readback) | ≈14 ms mean, p95 ≈16 ms | **0** (no readback) |
+| `push` (`gst_app_src_push_buffer`) | ≈0.4 ms mean | **≈0.008 ms** mean, p95 ≈0.01 ms |
+| `fps` | 25.0 | 25.0 |
+| `e2e` (submit → push) | ≈80 ms (fence polling) | n/a in this iteration |
+
+Example log line from the zero-copy heartbeat:
+
+```
+LogGStreamer: hybrid: fps=25.0 push=0.008ms p95=0.009 pushed=1199
+```
+
+The GPU readback is the entire reason zero-copy exists. Eliminating it is the headline number.
+
+### Diagnostics
+
+Log bridge forwards GStreamer's internal debug output into `LogGStreamer` so pipeline errors, warnings, and registration failures show up in the standard UE log. For D3D12-level diagnostics during development, run the editor with `-d3ddebug -dred` — the GStreamer plugin does not enable those by default.
 
 ## License
 
