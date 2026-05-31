@@ -50,6 +50,11 @@ namespace GstCore
 	{
 		if (g_inited)
 		{
+			if (g_log_cb)
+			{
+				gst_debug_remove_log_function(GstLogFunc);
+				g_log_cb = nullptr;
+			}
 			gst_deinit();
 			g_inited = false;
 		}
@@ -74,12 +79,16 @@ namespace GstCore
 
 	void SetLogCallback(FLogCallback Cb)
 	{
-		g_log_cb = Cb;
-		if (Cb)
+		if (g_log_cb && !Cb)
+		{
+			gst_debug_remove_log_function(GstLogFunc);
+		}
+		else if (!g_log_cb && Cb)
 		{
 			gst_debug_remove_log_function(gst_debug_log_default);
 			gst_debug_add_log_function(GstLogFunc, nullptr, nullptr);
 		}
+		g_log_cb = Cb;
 	}
 
 	bool IsPluginAvailable(const char* Name, char* OutVersionBuf, size_t VersionBufSize)

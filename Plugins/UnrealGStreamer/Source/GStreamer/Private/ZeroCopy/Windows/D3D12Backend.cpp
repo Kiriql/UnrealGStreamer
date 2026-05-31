@@ -75,11 +75,14 @@ public:
 
     virtual void Shutdown() override
     {
-        for (auto& Kv : Handles)
         {
-            if (Kv.Value.Resource) Kv.Value.Resource->Release();
+            FScopeLock Lock(&HandlesMx);
+            for (auto& Kv : Handles)
+            {
+                if (Kv.Value.Resource) Kv.Value.Resource->Release();
+            }
+            Handles.Empty();
         }
-        Handles.Empty();
         Fence.Reset();
         Device = nullptr;
         DynamicRHI = nullptr;
@@ -144,13 +147,18 @@ public:
             return false;
         }
 
-        const uint64 Id = NextHandleId++;
         FEntry Entry;
         Entry.Resource = Resource;
         Entry.Width = Width;
         Entry.Height = Height;
         Entry.Format = Format;
-        Handles.Add(Id, Entry);
+
+        uint64 Id;
+        {
+            FScopeLock Lock(&HandlesMx);
+            Id = NextHandleId++;
+            Handles.Add(Id, Entry);
+        }
 
         OutHandle.Id = Id;
         OutHandle.Native = Resource;
@@ -159,11 +167,16 @@ public:
 
     virtual void FreeSharedTexture(FZeroCopyTextureHandle Handle) override
     {
-        if (FEntry* Entry = Handles.Find(Handle.Id))
+        ID3D12Resource* ToRelease = nullptr;
         {
-            if (Entry->Resource) Entry->Resource->Release();
-            Handles.Remove(Handle.Id);
+            FScopeLock Lock(&HandlesMx);
+            if (FEntry* Entry = Handles.Find(Handle.Id))
+            {
+                ToRelease = Entry->Resource;
+                Handles.Remove(Handle.Id);
+            }
         }
+        if (ToRelease) ToRelease->Release();
     }
 
     virtual uint64 SignalReady(FZeroCopyTextureHandle Handle) override
@@ -174,9 +187,13 @@ public:
 
     virtual void* WrapAsGstMemory(FZeroCopyTextureHandle Handle, uint64 /*FenceValue*/) override
     {
-        FEntry* Entry = Handles.Find(Handle.Id);
-        if (!Entry || !Entry->Resource || !Device) return nullptr;
-        return GstD3D12WrapResource(Device, Entry->Resource, 0);
+        ID3D12Resource* Resource = nullptr;
+        {
+            FScopeLock Lock(&HandlesMx);
+            if (FEntry* Entry = Handles.Find(Handle.Id)) Resource = Entry->Resource;
+        }
+        if (!Resource || !Device) return nullptr;
+        return GstD3D12WrapResource(Device, Resource, 0);
     }
 
     virtual void* WrapExternalTextureAsGstMemory(FRHITexture* Texture) override
@@ -230,6 +247,7 @@ private:
 
     uint64 NextHandleId = 1;
     TMap<uint64, FEntry> Handles;
+    FCriticalSection HandlesMx;
 };
 
 IZeroCopyBackend* CreateD3D12ZeroCopyBackend()

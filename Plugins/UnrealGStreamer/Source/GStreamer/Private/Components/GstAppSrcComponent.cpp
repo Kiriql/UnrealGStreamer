@@ -11,19 +11,58 @@
 #include "RenderCommandFence.h"
 #include "RHICommandList.h"
 
+class FGstAppSrcBuffer;
+
+// Shared state between component and any in-flight buffers gst still holds.
+// Lives as TSharedPtr — component drops its ref on ResetState, gst-side
+// buffers keep it alive until DestroyNotify fires.
+struct FGstAppSrcBufferPool
+{
+    FCriticalSection Mx;
+    bool bAlive = true;
+    TArray<FGstAppSrcBuffer*> Pool;
+};
+
 class FGstAppSrcBuffer : public IGstAppSrcBuffer
 {
 public:
-    FGstAppSrcBuffer(UGstAppSrcComponent* InOwner) : Owner(InOwner)
+    FGstAppSrcBuffer(TSharedPtr<FGstAppSrcBufferPool, ESPMode::ThreadSafe> InPool)
+        : SharedPool(MoveTemp(InPool))
     {
         ColorBuffer.Reserve(1920 * 1080);
     }
 
-    virtual void Release() override { Owner->ReleaseBuffer(this); }
+    virtual void Release() override
+    {
+        if (!SharedPool)
+        {
+            delete this;
+            return;
+        }
+        bool bSelfDestruct = false;
+        {
+            FScopeLock Lock(&SharedPool->Mx);
+            if (SharedPool->bAlive)
+            {
+                SharedPool->Pool.Add(this);
+            }
+            else
+            {
+                bSelfDestruct = true;
+            }
+        }
+        if (bSelfDestruct)
+        {
+            // SharedPool member drops its ref inside the destructor — that runs after the lock
+            // is released, so the FGstAppSrcBufferPool can be freed cleanly if we hold the last ref.
+            delete this;
+        }
+    }
+
     virtual void* GetDataPtr() override { return ColorBuffer.GetData(); }
     virtual size_t GetDataSize() override { return ColorBuffer.Num() * sizeof(FColor); }
 
-    UGstAppSrcComponent* Owner;
+    TSharedPtr<FGstAppSrcBufferPool, ESPMode::ThreadSafe> SharedPool;
     TArray<FColor> ColorBuffer;
     FRenderCommandFence Fence;
     uint64 FrameId = 0;
@@ -52,7 +91,27 @@ void UGstAppSrcComponent::ResetState()
         AppSrc->Disconnect();
     }
     GstSafeDestroy(AppSrc);
-    DestroyBuffers();
+
+    // BufferQueue entries are game-thread-owned (haven't been pushed to gst yet — fence still pending).
+    // Safe to FlushRenderingCommands and delete directly.
+    if (BufferQueue.Num() > 0)
+    {
+        FlushRenderingCommands();
+        for (FGstAppSrcBuffer* B : BufferQueue) delete B;
+        BufferQueue.Reset();
+    }
+
+    // Pool may still be referenced by gst-in-flight buffers. Mark dead and drain our copy;
+    // any later Release() from gst will self-destruct via the bAlive check.
+    if (Pool)
+    {
+        FScopeLock Lock(&Pool->Mx);
+        Pool->bAlive = false;
+        for (FGstAppSrcBuffer* B : Pool->Pool) delete B;
+        Pool->Pool.Reset();
+    }
+    Pool.Reset();
+
     if (Metrics) { delete Metrics; Metrics = nullptr; }
     LastTickWallSeconds = 0.0;
     FramesSinceLastLog = 0;
@@ -68,6 +127,7 @@ void UGstAppSrcComponent::CbPipelineStart(IGstPipeline* Pipeline)
         return;
     }
 
+    Pool = MakeShared<FGstAppSrcBufferPool, ESPMode::ThreadSafe>();
     Metrics = new FGstAppSrcMetrics();
 
     AppSrc = IGstAppSrc::CreateInstance();
@@ -198,12 +258,13 @@ void UGstAppSrcComponent::PushBufferAsync(FTextureRenderTargetResource* TextureR
         }
         else
         {
-            UE_LOG(LogGStreamer, Error, TEXT("AppSrc SetCaps failed: %s"), *CapsStr);
+            UE_LOG(LogGStreamer, Error, TEXT("AppSrc SetCaps failed (giving up): %s"), *CapsStr);
+            bCapsSet = true; // don't retry every frame
         }
     }
     const FReadSurfaceDataFlags InFlags = FReadSurfaceDataFlags(RCM_UNorm, CubeFace_MAX);
 
-    FGstAppSrcBuffer* Buffer = GetBuffer();
+    FGstAppSrcBuffer* Buffer = AcquireBuffer();
     Buffer->ColorBuffer.SetNum(Size.X * Size.Y);
     Buffer->FrameId = Metrics != nullptr ? Metrics->FrameIdAtomic.load(std::memory_order_relaxed) : 0;
     Buffer->QueueDepthAtSubmit = BufferQueue.Num();
@@ -237,35 +298,15 @@ void UGstAppSrcComponent::PushBufferAsync(FTextureRenderTargetResource* TextureR
     Buffer->Fence.BeginFence();
 }
 
-FGstAppSrcBuffer* UGstAppSrcComponent::GetBuffer()
+FGstAppSrcBuffer* UGstAppSrcComponent::AcquireBuffer()
 {
+    if (Pool)
     {
-        FScopeLock Lock(&PoolMx);
-        if (BufferPool.Num() > 0)
+        FScopeLock Lock(&Pool->Mx);
+        if (Pool->Pool.Num() > 0)
         {
-            return BufferPool.Pop();
+            return Pool->Pool.Pop();
         }
     }
-    return new FGstAppSrcBuffer(this);
-}
-
-void UGstAppSrcComponent::ReleaseBuffer(FGstAppSrcBuffer* Buffer)
-{
-    FScopeLock Lock(&PoolMx);
-    BufferPool.Add(Buffer);
-}
-
-void UGstAppSrcComponent::DestroyBuffers()
-{
-    if (BufferQueue.Num() > 0)
-    {
-        FlushRenderingCommands();
-        for (FGstAppSrcBuffer* B : BufferQueue) delete B;
-        BufferQueue.Reset();
-    }
-    {
-        FScopeLock Lock(&PoolMx);
-        for (FGstAppSrcBuffer* B : BufferPool) delete B;
-        BufferPool.Reset();
-    }
+    return new FGstAppSrcBuffer(Pool);
 }

@@ -7,6 +7,7 @@
 class IGstPipeline;
 class IGstAppSrc;
 class FGstAppSrcBuffer;
+struct FGstAppSrcBufferPool;
 class FTextureRenderTargetResource;
 
 UCLASS(ClassGroup = (GStreamer), meta = (BlueprintSpawnableComponent))
@@ -44,16 +45,11 @@ public:
 protected:
     void ResetState();
     void PushBufferAsync(FTextureRenderTargetResource* TextureResource);
-
-    friend class FGstAppSrcBuffer;
-    FGstAppSrcBuffer* GetBuffer();
-    void ReleaseBuffer(FGstAppSrcBuffer* Buffer);
-    void DestroyBuffers();
+    FGstAppSrcBuffer* AcquireBuffer();
 
     IGstAppSrc* AppSrc = nullptr;
-    TArray<FGstAppSrcBuffer*> BufferPool;
     TArray<FGstAppSrcBuffer*> BufferQueue;
-    FCriticalSection PoolMx;
+    TSharedPtr<FGstAppSrcBufferPool, ESPMode::ThreadSafe> Pool;
 
     class FGstAppSrcMetrics* Metrics = nullptr;
     double LastTickWallSeconds = 0.0;

@@ -4,9 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
-#include <memory>
 #include <string>
-#include <thread>
 
 namespace
 {
@@ -37,15 +35,12 @@ public:
     virtual void* GetGPipeline() override { return m_Pipeline; }
     virtual void* GetGBus() override { return m_Bus; }
 
-    void WorkerLoop();
-    gboolean OnBusMessage(GstMessage* Message);
+    GstBusSyncReply OnBusMessage(GstMessage* Message);
 
 private:
     std::string m_Name;
     GstElement* m_Pipeline = nullptr;
     GstBus* m_Bus = nullptr;
-    GMainLoop* m_Loop = nullptr;
-    std::unique_ptr<std::thread> m_Worker;
 };
 
 IGstPipeline* IGstPipeline::CreateInstance()
@@ -59,8 +54,11 @@ void FGstPipelineImpl::Destroy()
 }
 
 #define GST_RELEASE(func, ptr) do { if (ptr) { func(ptr); ptr = nullptr; } } while (0)
-static gboolean BusMessageFunc(GstBus*, GstMessage* Message, FGstPipelineImpl* Context) { return Context->OnBusMessage(Message); }
-static void ThreadWorkerFunc(FGstPipelineImpl* Context) { Context->WorkerLoop(); }
+
+static GstBusSyncReply BusSyncHandlerFunc(GstBus*, GstMessage* Message, gpointer UserData)
+{
+    return static_cast<FGstPipelineImpl*>(UserData)->OnBusMessage(Message);
+}
 
 bool FGstPipelineImpl::Init(const char* Name, const char* Config, char* OutErrBuf, size_t ErrBufSize)
 {
@@ -97,18 +95,22 @@ bool FGstPipelineImpl::Init(const char* Name, const char* Config, char* OutErrBu
         return false;
     }
 
-    gst_bus_add_watch(m_Bus, (GstBusFunc)BusMessageFunc, this);
+    // Sync handler fires on the thread that posts the message — no GMainLoop required.
+    // We just log and never queue; returning GST_BUS_DROP consumes the message.
+    gst_bus_set_sync_handler(m_Bus, BusSyncHandlerFunc, this, nullptr);
     return true;
 }
 
 void FGstPipelineImpl::Shutdown()
 {
-    Stop();
-
-    if (m_Pipeline)
+    if (m_Bus)
     {
-        gst_element_set_state(m_Pipeline, GST_STATE_NULL);
+        // Atomically detach the handler before tearing down. gst guarantees no NEW callbacks
+        // after this; set_state(NULL) below drains streaming threads so any in-flight ones drop.
+        gst_bus_set_sync_handler(m_Bus, nullptr, nullptr, nullptr);
     }
+
+    Stop();
 
     GST_RELEASE(gst_object_unref, m_Bus);
     GST_RELEASE(gst_object_unref, m_Pipeline);
@@ -116,53 +118,30 @@ void FGstPipelineImpl::Shutdown()
 
 bool FGstPipelineImpl::Start()
 {
-    if (m_Loop)
+    if (!m_Pipeline) return false;
+
+    const GstStateChangeReturn Ret = gst_element_set_state(m_Pipeline, GST_STATE_PLAYING);
+    if (Ret == GST_STATE_CHANGE_FAILURE)
     {
+        g_printerr("[GstPipeline][%s] set_state(PLAYING) FAILURE\n", m_Name.c_str());
         return false;
     }
-
-    m_Loop = g_main_loop_new(nullptr, FALSE);
-    if (!m_Loop)
-    {
-        return false;
-    }
-
-    m_Worker.reset(new std::thread(ThreadWorkerFunc, this));
     return true;
 }
 
 void FGstPipelineImpl::Stop()
 {
-    if (m_Loop)
+    if (m_Pipeline)
     {
-        g_main_loop_quit(m_Loop);
-
-        if (m_Worker && m_Worker->joinable())
-        {
-            m_Worker->join();
-        }
-        m_Worker.reset(nullptr);
-
-        GST_RELEASE(g_main_loop_unref, m_Loop);
+        gst_element_set_state(m_Pipeline, GST_STATE_NULL);
     }
 }
 
-void FGstPipelineImpl::WorkerLoop()
-{
-    gst_element_set_state(m_Pipeline, GST_STATE_PLAYING);
-    g_main_loop_run(m_Loop);
-    gst_element_set_state(m_Pipeline, GST_STATE_NULL);
-}
-
-gboolean FGstPipelineImpl::OnBusMessage(GstMessage* Message)
+GstBusSyncReply FGstPipelineImpl::OnBusMessage(GstMessage* Message)
 {
     const int Type = GST_MESSAGE_TYPE(Message);
     switch (Type)
     {
-    case GST_MESSAGE_TAG:
-    case GST_MESSAGE_BUFFERING:
-        break;
-
     case GST_MESSAGE_EOS:
         g_print("[GstPipeline][%s] EOS\n", m_Name.c_str());
         break;
@@ -179,7 +158,6 @@ gboolean FGstPipelineImpl::OnBusMessage(GstMessage* Message)
             Dbg ? Dbg : "<null>");
         if (Err) g_error_free(Err);
         if (Dbg) g_free(Dbg);
-        g_main_loop_quit(m_Loop);
         break;
     }
 
@@ -198,12 +176,9 @@ gboolean FGstPipelineImpl::OnBusMessage(GstMessage* Message)
         break;
     }
 
-    case GST_MESSAGE_STATE_CHANGED:
-        break;
-
     default:
         break;
     }
 
-    return TRUE;
+    return GST_BUS_DROP;
 }
