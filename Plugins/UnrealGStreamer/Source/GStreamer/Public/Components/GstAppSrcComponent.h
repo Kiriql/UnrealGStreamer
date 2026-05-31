@@ -44,7 +44,7 @@ public:
 
 protected:
     void ResetState();
-    void PushBufferAsync(FTextureRenderTargetResource* TextureResource);
+    void PushBufferAsync(FTextureRenderTargetResource* TextureResource, uint64 FrameIndex);
     FGstAppSrcBuffer* AcquireBuffer();
 
     IGstAppSrc* AppSrc = nullptr;

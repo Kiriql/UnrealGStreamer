@@ -162,6 +162,8 @@ void UGstAppSrcComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
     Metrics->RecordWallTickSeconds(NowSec);
     LastTickWallSeconds = NowSec;
 
+    const uint64 FrameIndex = Metrics->FrameIdAtomic.fetch_add(1, std::memory_order_relaxed) + 1;
+
     AActor* Owner = GetOwner();
     for (FComponentReference& ComponentReference : AppSrcCaptures)
     {
@@ -174,7 +176,7 @@ void UGstAppSrcComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
         FTextureRenderTargetResource* TextureResource = TextureTarget->GameThread_GetRenderTargetResource();
         if (TextureResource)
         {
-            PushBufferAsync(TextureResource);
+            PushBufferAsync(TextureResource, FrameIndex);
         }
     }
 
@@ -210,8 +212,6 @@ void UGstAppSrcComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
         }
     }
 
-    Metrics->FrameIdAtomic.fetch_add(1, std::memory_order_relaxed);
-
     if (++FramesSinceLastLog >= MetricsLogIntervalFrames)
     {
         FramesSinceLastLog = 0;
@@ -230,7 +230,7 @@ void UGstAppSrcComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
     }
 }
 
-void UGstAppSrcComponent::PushBufferAsync(FTextureRenderTargetResource* TextureResource)
+void UGstAppSrcComponent::PushBufferAsync(FTextureRenderTargetResource* TextureResource, uint64 FrameIndex)
 {
     if (BufferQueue.Num() >= MaxQueueLength)
     {
@@ -266,7 +266,7 @@ void UGstAppSrcComponent::PushBufferAsync(FTextureRenderTargetResource* TextureR
 
     FGstAppSrcBuffer* Buffer = AcquireBuffer();
     Buffer->ColorBuffer.SetNum(Size.X * Size.Y);
-    Buffer->FrameId = Metrics != nullptr ? Metrics->FrameIdAtomic.load(std::memory_order_relaxed) : 0;
+    Buffer->FrameId = FrameIndex;
     Buffer->QueueDepthAtSubmit = BufferQueue.Num();
     Buffer->SubmitWallSeconds = FPlatformTime::Seconds();
     Buffer->GpuStartSeconds = 0.0;

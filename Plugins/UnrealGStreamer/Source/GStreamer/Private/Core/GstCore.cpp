@@ -1,4 +1,5 @@
 #include "GstCore.h"
+#include "GstUtils.h"
 
 #include <gst/gst.h>
 
@@ -18,14 +19,7 @@ namespace
 			Function ? Function : "", Msg ? Msg : "");
 	}
 
-	void SafeCopy(char* Dst, size_t Sz, const char* Src)
-	{
-		if (!Dst || Sz == 0) return;
-		const char* Use = Src ? Src : "";
-		size_t i = 0;
-		for (; i + 1 < Sz && Use[i] != 0; ++i) Dst[i] = Use[i];
-		Dst[i] = 0;
-	}
+	using GstUtils::SafeCopy;
 }
 
 namespace GstCore

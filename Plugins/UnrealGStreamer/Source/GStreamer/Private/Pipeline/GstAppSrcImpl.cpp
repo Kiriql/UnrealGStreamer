@@ -18,7 +18,7 @@ public:
     virtual void Disconnect() override;
     virtual bool SetCaps(const char* CapsString) override;
     virtual bool PushBuffer(IGstAppSrcBuffer* Buffer) override;
-    virtual bool PushSharedBuffer(void* GstMemoryRaw) override;
+    virtual bool PushSharedBuffer(FGstMemoryHandle* Memory) override;
 
 private:
     std::string m_Name;
@@ -123,15 +123,15 @@ bool FGstAppSrcImpl::PushBuffer(IGstAppSrcBuffer* Buffer)
     return true;
 }
 
-bool FGstAppSrcImpl::PushSharedBuffer(void* GstMemoryRaw)
+bool FGstAppSrcImpl::PushSharedBuffer(FGstMemoryHandle* Memory)
 {
-    if (!m_AppSrc || !GstMemoryRaw)
+    GstMemory* Mem = reinterpret_cast<GstMemory*>(Memory);
+    if (!m_AppSrc || !Mem)
     {
-        if (GstMemoryRaw) gst_memory_unref(static_cast<GstMemory*>(GstMemoryRaw));
+        if (Mem) gst_memory_unref(Mem);
         return false;
     }
 
-    GstMemory* Mem = static_cast<GstMemory*>(GstMemoryRaw);
     GstBuffer* BufferObj = gst_buffer_new();
     gst_buffer_append_memory(BufferObj, Mem);
 

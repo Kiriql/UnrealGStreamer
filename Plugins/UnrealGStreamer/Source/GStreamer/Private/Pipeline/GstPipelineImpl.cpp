@@ -1,4 +1,5 @@
 #include "Pipeline/IGstPipeline.h"
+#include "Core/GstUtils.h"
 
 #include <gst/gst.h>
 
@@ -6,17 +7,7 @@
 #include <cstring>
 #include <string>
 
-namespace
-{
-    void SafeCopy(char* Dst, size_t DstSize, const char* Src)
-    {
-        if (!Dst || DstSize == 0) return;
-        if (!Src) { Dst[0] = '\0'; return; }
-        size_t i = 0;
-        for (; i + 1 < DstSize && Src[i]; ++i) Dst[i] = Src[i];
-        Dst[i] = '\0';
-    }
-}
+using GstUtils::SafeCopy;
 
 class FGstPipelineImpl : public IGstPipeline
 {

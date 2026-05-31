@@ -61,17 +61,27 @@ bool UGstPipelineComponent::StartPipeline()
         return false;
     }
 
+    int32 BoundCount = 0;
     if (AActor* Owner = GetOwner())
     {
         TInlineComponentArray<UGstElementComponent*> Components;
         Owner->GetComponents(Components);
         for (UGstElementComponent* Comp : Components)
         {
+            if (Comp == this) continue;
             if (Comp->PipelineName == PipelineName)
             {
                 Comp->CbPipelineStart(Pipeline);
+                ++BoundCount;
             }
         }
+    }
+    if (BoundCount == 0)
+    {
+        UE_LOG(LogGStreamer, Warning,
+            TEXT("Pipeline '%s' started with 0 bound GstElementComponents on the owning actor. "
+                 "Check that AppSrc/AppSink components have matching PipelineName."),
+            *PipelineName);
     }
 
     if (!Pipeline->Start())

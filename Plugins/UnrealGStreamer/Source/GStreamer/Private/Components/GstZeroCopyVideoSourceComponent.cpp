@@ -137,7 +137,7 @@ void UGstZeroCopyVideoSourceComponent::TickComponent(float DeltaTime, ELevelTick
     {
         IZeroCopyBackend* Backend = IZeroCopyBackend::GetForCurrentPlatform();
         if (!Backend) return;
-        void* GstMem = Backend->WrapExternalTextureAsGstMemoryWithFence(DstTexRaw, RHICmdList);
+        FGstMemoryHandle* GstMem = Backend->WrapExternalTextureAsGstMemoryWithFence(DstTexRaw, RHICmdList);
         if (!GstMem) return;
 
         const double PushStart = FPlatformTime::Seconds();

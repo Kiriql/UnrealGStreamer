@@ -185,7 +185,7 @@ public:
         return ++FenceValue;
     }
 
-    virtual void* WrapAsGstMemory(FZeroCopyTextureHandle Handle, uint64 /*FenceValue*/) override
+    virtual FGstMemoryHandle* WrapAsGstMemory(FZeroCopyTextureHandle Handle, uint64 /*FenceValue*/) override
     {
         ID3D12Resource* Resource = nullptr;
         {
@@ -193,18 +193,18 @@ public:
             if (FEntry* Entry = Handles.Find(Handle.Id)) Resource = Entry->Resource;
         }
         if (!Resource || !Device) return nullptr;
-        return GstD3D12WrapResource(Device, Resource, 0);
+        return static_cast<FGstMemoryHandle*>(GstD3D12WrapResource(Device, Resource, 0));
     }
 
-    virtual void* WrapExternalTextureAsGstMemory(FRHITexture* Texture) override
+    virtual FGstMemoryHandle* WrapExternalTextureAsGstMemory(FRHITexture* Texture) override
     {
         if (!Texture || !Device || !DynamicRHI) return nullptr;
         ID3D12Resource* Raw = DynamicRHI->RHIGetResource(Texture);
         if (!Raw) return nullptr;
-        return GstD3D12WrapResource(Device, Raw, 0);
+        return static_cast<FGstMemoryHandle*>(GstD3D12WrapResource(Device, Raw, 0));
     }
 
-    virtual void* WrapExternalTextureAsGstMemoryWithFence(FRHITexture* Texture, FRHICommandListImmediate& RHICmdList) override
+    virtual FGstMemoryHandle* WrapExternalTextureAsGstMemoryWithFence(FRHITexture* Texture, FRHICommandListImmediate& RHICmdList) override
     {
         if (!Texture || !Device || !DynamicRHI || !Fence) return nullptr;
         ID3D12Resource* Raw = DynamicRHI->RHIGetResource(Texture);
@@ -228,7 +228,7 @@ public:
         void* Mem = GstD3D12WrapResourceWithFence(Device, Raw, 0, FenceRaw, (unsigned long long)FV);
         if (!Mem) UE_LOG(LogGStreamer, Error, TEXT("GstD3D12WrapResourceWithFence returned null fv=%llu"),
             (unsigned long long)FV);
-        return Mem;
+        return static_cast<FGstMemoryHandle*>(Mem);
     }
 
 private:

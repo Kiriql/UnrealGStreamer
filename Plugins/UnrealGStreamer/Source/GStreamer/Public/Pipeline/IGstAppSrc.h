@@ -2,6 +2,8 @@
 
 #include <cstddef>
 
+#include "Core/GstMemoryHandle.h"
+
 class IGstPipeline;
 
 class IGstAppSrcBuffer
@@ -25,7 +27,7 @@ public:
 	virtual void Disconnect() = 0;
 	virtual bool SetCaps(const char* CapsString) = 0;
 	virtual bool PushBuffer(IGstAppSrcBuffer* Buffer) = 0;
-	virtual bool PushSharedBuffer(void* GstMemoryRaw) = 0;
+	virtual bool PushSharedBuffer(FGstMemoryHandle* Memory) = 0;
 
 protected:
 	IGstAppSrc() {}

@@ -3,6 +3,8 @@
 #include "CoreMinimal.h"
 #include "RHIResources.h"
 
+#include "Core/GstMemoryHandle.h"
+
 enum class EGstZeroCopyFormat : uint8
 {
     BGRA8 = 0,
@@ -38,12 +40,12 @@ public:
 
     virtual uint64 SignalReady(FZeroCopyTextureHandle Handle) = 0;
 
-    virtual void* WrapAsGstMemory(FZeroCopyTextureHandle Handle, uint64 FenceValue) = 0;
+    virtual FGstMemoryHandle* WrapAsGstMemory(FZeroCopyTextureHandle Handle, uint64 FenceValue) = 0;
 
-    virtual void* WrapExternalTextureAsGstMemory(class FRHITexture* Texture) = 0;
+    virtual FGstMemoryHandle* WrapExternalTextureAsGstMemory(class FRHITexture* Texture) = 0;
 
     /** Wraps an externally-owned FRHITexture and attaches a GPU fence the gst-side queue
-     *  will wait on before reading. Returns GstMemory* (opaque). */
-    virtual void* WrapExternalTextureAsGstMemoryWithFence(
+     *  will wait on before reading. */
+    virtual FGstMemoryHandle* WrapExternalTextureAsGstMemoryWithFence(
         class FRHITexture* Texture, class FRHICommandListImmediate& RHICmdList) = 0;
 };
