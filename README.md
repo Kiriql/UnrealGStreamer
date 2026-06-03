@@ -108,6 +108,38 @@ LogGStreamer: hybrid: fps=25.0 push=0.008ms p95=0.009 pushed=1199
 
 The GPU readback is the entire reason zero-copy exists. Eliminating it is the headline number.
 
+## Pipeline presets and encoder
+
+`UGstPipelineComponent` exposes a `Preset` dropdown so you don't have to hand-write a `gst-launch` string for common cases. Pick `Custom` to write your own in `PipelineConfig`. Presets that write to a file use `FileOutputPath`.
+
+| Preset | Pipeline (resolved) |
+| --- | --- |
+| `Display: BGRA -> d3d12videosink` | `appsrc … ! videoconvert ! d3d12videosink sync=false` |
+| `Encode: H.264 -> fakesink` | `appsrc … ! d3d12upload ! d3d12h264enc name=enc ! h264parse ! fakesink sync=false` |
+| `Encode: H.264 -> MP4 file` | `… ! d3d12h264enc name=enc ! h264parse ! mp4mux ! filesink location=<FileOutputPath>` |
+| `Encode: H.264 -> UDP/RTP (127.0.0.1:5000)` | `… ! d3d12h264enc name=enc ! h264parse config-interval=1 ! rtph264pay pt=96 ! udpsink host=127.0.0.1 port=5000` |
+| `Encode: H.265 -> fakesink` | `… ! d3d12h265enc name=enc ! h265parse ! fakesink sync=false` |
+| `Encode: H.265 -> MP4 file` | `… ! d3d12h265enc name=enc ! h265parse ! mp4mux ! filesink location=<FileOutputPath>` |
+| `Encode: AV1 -> fakesink` | `… ! d3d12av1enc name=enc ! av1parse ! fakesink sync=false` (requires Ada / RTX 40+ for NV hardware AV1 encode) |
+
+Encoder presets name the encoder element `enc` so `UGstVideoEncoderComponent` can find it. Add that component on the same actor to set:
+
+- `BitrateKbps` — target bitrate (encoders that don't support the `bitrate` property are skipped silently).
+- `KeyframeIntervalFrames` — `gop-size` (or `key-int-max` on encoders that use that name).
+- `RateControl` — `CBR` / `VBR` / `CQP` mapped onto the encoder's `rc-mode` property where available.
+
+For a `Custom` pipeline, name your encoder element `enc` (or change `ElementName` on the encoder component) and the same settings apply.
+
+### Sanity-check the encoder
+
+The `H264_UdpRtp` preset is the easiest way to confirm the encoder is actually emitting a valid stream. From any machine on the loopback:
+
+```
+ffplay -fflags nobuffer -flags low_delay -protocol_whitelist file,udp,rtp -i sdp.txt
+```
+
+…where `sdp.txt` describes the RTP stream (`m=video 5000 RTP/AVP 96`, `a=rtpmap:96 H264/90000`). `H264_FileMp4` writes a `ue_stream.mp4` you can open in any player.
+
 ### Diagnostics
 
 Log bridge forwards GStreamer's internal debug output into `LogGStreamer` so pipeline errors, warnings, and registration failures show up in the standard UE log. For D3D12-level diagnostics during development, run the editor with `-d3ddebug -dred` — the GStreamer plugin does not enable those by default.

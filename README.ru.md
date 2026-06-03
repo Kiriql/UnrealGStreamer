@@ -108,6 +108,38 @@ LogGStreamer: hybrid: fps=25.0 push=0.008ms p95=0.009 pushed=1199
 
 GPU readback — это единственная причина, по которой zero-copy вообще существует. Его уход и есть главная цифра.
 
+## Pipeline-пресеты и энкодер
+
+В `UGstPipelineComponent` есть выпадающий список `Preset` — типовые конфигурации, чтобы не писать `gst-launch`-строку руками. `Custom` оставляет за пользователем поле `PipelineConfig`. Пресеты с файловым выводом используют `FileOutputPath`.
+
+| Preset | Pipeline (после раскрытия) |
+| --- | --- |
+| `Display: BGRA -> d3d12videosink` | `appsrc … ! videoconvert ! d3d12videosink sync=false` |
+| `Encode: H.264 -> fakesink` | `appsrc … ! d3d12upload ! d3d12h264enc name=enc ! h264parse ! fakesink sync=false` |
+| `Encode: H.264 -> MP4 file` | `… ! d3d12h264enc name=enc ! h264parse ! mp4mux ! filesink location=<FileOutputPath>` |
+| `Encode: H.264 -> UDP/RTP (127.0.0.1:5000)` | `… ! d3d12h264enc name=enc ! h264parse config-interval=1 ! rtph264pay pt=96 ! udpsink host=127.0.0.1 port=5000` |
+| `Encode: H.265 -> fakesink` | `… ! d3d12h265enc name=enc ! h265parse ! fakesink sync=false` |
+| `Encode: H.265 -> MP4 file` | `… ! d3d12h265enc name=enc ! h265parse ! mp4mux ! filesink location=<FileOutputPath>` |
+| `Encode: AV1 -> fakesink` | `… ! d3d12av1enc name=enc ! av1parse ! fakesink sync=false` (для NV hardware AV1 нужен Ada / RTX 40+) |
+
+Encoder-пресеты называют элемент энкодера `enc`, чтобы `UGstVideoEncoderComponent` нашёл его по имени. Добавьте этот компонент на тот же актор и настройте:
+
+- `BitrateKbps` — целевой битрейт (на энкодерах без свойства `bitrate` игнорируется без ошибки).
+- `KeyframeIntervalFrames` — `gop-size` (или `key-int-max` там, где используется другое имя).
+- `RateControl` — `CBR` / `VBR` / `CQP`, маппится на свойство `rc-mode` энкодера, если оно есть.
+
+Для `Custom` pipeline — назовите свой энкодер `enc` (или поменяйте `ElementName` на encoder-компоненте), всё остальное применится так же.
+
+### Проверка энкодера
+
+`H264_UdpRtp` — самый быстрый способ убедиться, что энкодер реально гонит валидный поток. С любой машины на loopback:
+
+```
+ffplay -fflags nobuffer -flags low_delay -protocol_whitelist file,udp,rtp -i sdp.txt
+```
+
+…где `sdp.txt` описывает RTP-поток (`m=video 5000 RTP/AVP 96`, `a=rtpmap:96 H264/90000`). `H264_FileMp4` пишет `ue_stream.mp4`, открывается любым плеером.
+
 ### Диагностика
 
 Log bridge перенаправляет внутренний debug-вывод GStreamer в `LogGStreamer` — ошибки пайплайна, warnings, фейлы регистрации плагинов видны в обычном логе UE. Для D3D12-уровня диагностики на этапе разработки — запуск редактора с `-d3ddebug -dred`; плагин по умолчанию это не включает.
