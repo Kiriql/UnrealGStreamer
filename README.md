@@ -118,17 +118,16 @@ The GPU readback is the entire reason zero-copy exists. Eliminating it is the he
 | `Encode: H.264 -> fakesink` | `appsrc … ! d3d12upload ! d3d12h264enc name=enc ! h264parse ! fakesink sync=false` |
 | `Encode: H.264 -> MP4 file` | `… ! d3d12h264enc name=enc ! h264parse ! mp4mux ! filesink location=<FileOutputPath>` |
 | `Encode: H.264 -> UDP/RTP (127.0.0.1:5000)` | `… ! d3d12h264enc name=enc ! h264parse config-interval=1 ! rtph264pay pt=96 ! udpsink host=127.0.0.1 port=5000` |
-| `Encode: H.265 -> fakesink` | `… ! d3d12h265enc name=enc ! h265parse ! fakesink sync=false` |
-| `Encode: H.265 -> MP4 file` | `… ! d3d12h265enc name=enc ! h265parse ! mp4mux ! filesink location=<FileOutputPath>` |
-| `Encode: AV1 -> fakesink` | `… ! d3d12av1enc name=enc ! av1parse ! fakesink sync=false` (requires Ada / RTX 40+ for NV hardware AV1 encode) |
 
-Encoder presets name the encoder element `enc` so `UGstVideoEncoderComponent` can find it. Add that component on the same actor to set:
+> **Why H.264 only?** The upstream `d3d12` plugin ships H.264 encoder only — there is no `d3d12h265enc` / `d3d12av1enc` element in GStreamer yet (decoders exist, encoders don't). Hardware H.265/AV1 on Windows is reachable via `nvh265enc` / `mfh265enc` / `nvav1enc`, but those take sysmem (or D3D11) input, which forces a GPU↔CPU readback and breaks the zero-copy path that's the point of this plugin. H.265/AV1 presets will land as a one-line addition once `d3d12h265enc` / `d3d12av1enc` reach upstream.
+
+Encoder presets name the encoder element `enc`. `UGstPipelineComponent` exposes the common encoder properties directly so you don't need a separate component:
 
 - `BitrateKbps` — target bitrate (encoders that don't support the `bitrate` property are skipped silently).
 - `KeyframeIntervalFrames` — `gop-size` (or `key-int-max` on encoders that use that name).
 - `RateControl` — `CBR` / `VBR` / `CQP` mapped onto the encoder's `rc-mode` property where available.
 
-For a `Custom` pipeline, name your encoder element `enc` (or change `ElementName` on the encoder component) and the same settings apply.
+For a `Custom` pipeline, name your encoder element `enc` (or change `EncoderElementName` on the component) and the same settings apply. Set `EncoderElementName` to empty to skip the configuration step entirely.
 
 ### Sanity-check the encoder
 

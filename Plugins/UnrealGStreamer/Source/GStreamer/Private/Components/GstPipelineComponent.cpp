@@ -6,6 +6,13 @@
 #include "GameFramework/Actor.h"
 #include "RenderingThread.h"
 
+extern "C" int GstEncoderApplySettings(
+    void* PipelineRaw,
+    const char* ElementName,
+    int BitrateKbps,
+    int GopSize,
+    int RateControlMode);
+
 UGstPipelineComponent::UGstPipelineComponent()
 {
 }
@@ -65,17 +72,6 @@ FString UGstPipelineComponent::ResolvePipelineString() const
         return FString::Printf(
             TEXT("%s ! d3d12convert ! d3d12h264enc name=enc ! h264parse ! mp4mux ! filesink location=\"%s\""),
             Src, *FileOutputPath);
-
-    case EGstPipelinePreset::H265_Fakesink:
-        return FString::Printf(TEXT("%s ! d3d12convert ! d3d12h265enc name=enc ! h265parse ! fakesink sync=false"), Src);
-
-    case EGstPipelinePreset::H265_FileMp4:
-        return FString::Printf(
-            TEXT("%s ! d3d12convert ! d3d12h265enc name=enc ! h265parse ! mp4mux ! filesink location=\"%s\""),
-            Src, *FileOutputPath);
-
-    case EGstPipelinePreset::AV1_Fakesink:
-        return FString::Printf(TEXT("%s ! d3d12convert ! d3d12av1enc name=enc ! av1parse ! fakesink sync=false"), Src);
     }
     return PipelineConfig;
 }
@@ -109,6 +105,27 @@ bool UGstPipelineComponent::StartPipeline()
         UE_LOG(LogGStreamer, Error, TEXT("gst_parse_launch failed: %s"), UTF8_TO_TCHAR(ErrBuf));
         GstSafeDestroy(Pipeline);
         return false;
+    }
+
+    if (!EncoderElementName.IsEmpty())
+    {
+        const FTCHARToUTF8 EncNameUtf8(*EncoderElementName);
+        const int Rc = (int)RateControl;
+        const int Ret = GstEncoderApplySettings(
+            Pipeline->GetGPipeline(), EncNameUtf8.Get(),
+            BitrateKbps, KeyframeIntervalFrames, Rc);
+        if (Ret == 0)
+        {
+            UE_LOG(LogGStreamer, Log,
+                TEXT("Encoder '%s' configured: bitrate=%dkbps gop=%d rc=%d"),
+                *EncoderElementName, BitrateKbps, KeyframeIntervalFrames, Rc);
+        }
+        else if (Preset != EGstPipelinePreset::Custom && Preset != EGstPipelinePreset::Display_D3D12)
+        {
+            UE_LOG(LogGStreamer, Warning,
+                TEXT("Encoder element '%s' not found in pipeline '%s'"),
+                *EncoderElementName, *PipelineName);
+        }
     }
 
     int32 BoundCount = 0;

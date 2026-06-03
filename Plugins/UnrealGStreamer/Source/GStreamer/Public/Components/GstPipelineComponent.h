@@ -14,9 +14,15 @@ enum class EGstPipelinePreset : uint8
     H264_Fakesink     UMETA(DisplayName = "Encode: H.264 -> fakesink (benchmark)"),
     H264_FileMp4      UMETA(DisplayName = "Encode: H.264 -> MP4 file"),
     H264_UdpRtp       UMETA(DisplayName = "Encode: H.264 -> UDP/RTP (127.0.0.1:5000)"),
-    H265_Fakesink     UMETA(DisplayName = "Encode: H.265 -> fakesink (benchmark)"),
-    H265_FileMp4      UMETA(DisplayName = "Encode: H.265 -> MP4 file"),
-    AV1_Fakesink      UMETA(DisplayName = "Encode: AV1 -> fakesink (Ada+ GPU)"),
+};
+
+UENUM(BlueprintType)
+enum class EGstEncoderRateControl : uint8
+{
+    Default UMETA(DisplayName = "Default (don't touch)"),
+    CBR     UMETA(DisplayName = "CBR (constant bitrate)"),
+    VBR     UMETA(DisplayName = "VBR (variable bitrate)"),
+    CQP     UMETA(DisplayName = "CQP (constant quantizer)"),
 };
 
 UCLASS(ClassGroup = (GStreamer), meta = (BlueprintSpawnableComponent))
@@ -39,11 +45,24 @@ public:
     FString PipelineConfig = TEXT("appsrc name=ueapp is-live=true format=time ! videoconvert ! d3d12videosink sync=false");
 
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite,
-        meta = (EditCondition = "Preset == EGstPipelinePreset::H264_FileMp4 || Preset == EGstPipelinePreset::H265_FileMp4"))
+        meta = (EditCondition = "Preset == EGstPipelinePreset::H264_FileMp4"))
     FString FileOutputPath = TEXT("ue_stream.mp4");
 
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite)
     bool PipelineAutostart = true;
+
+    /** Name of the encoder element in the pipeline. Encoder presets use "enc"; for Custom set this to your encoder's name. Empty = skip encoder configuration. */
+    UPROPERTY(Category = "GStreamer|Encoder", EditAnywhere, BlueprintReadWrite)
+    FString EncoderElementName = TEXT("enc");
+
+    UPROPERTY(Category = "GStreamer|Encoder", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0"))
+    int32 BitrateKbps = 8000;
+
+    UPROPERTY(Category = "GStreamer|Encoder", EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0"))
+    int32 KeyframeIntervalFrames = 60;
+
+    UPROPERTY(Category = "GStreamer|Encoder", EditAnywhere, BlueprintReadWrite)
+    EGstEncoderRateControl RateControl = EGstEncoderRateControl::Default;
 
     UFUNCTION(Category = "GStreamer", BlueprintCallable)
     bool StartPipeline();
