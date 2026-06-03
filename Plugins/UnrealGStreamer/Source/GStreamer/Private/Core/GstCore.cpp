@@ -19,6 +19,18 @@ namespace
 			Function ? Function : "", Msg ? Msg : "");
 	}
 
+	// g_print()/g_printerr() route here. Default glib sends them to stdout/stderr which UE
+	// generally doesn't surface. Route through the same bridge as gst_debug so they appear
+	// in LogGStreamer.
+	void GlibPrintFunc(const gchar* Str)
+	{
+		if (g_log_cb && Str) g_log_cb(4 /*INFO*/, "g_print", "", 0, "", Str);
+	}
+	void GlibPrintErrFunc(const gchar* Str)
+	{
+		if (g_log_cb && Str) g_log_cb(2 /*WARNING*/, "g_printerr", "", 0, "", Str);
+	}
+
 	using GstUtils::SafeCopy;
 }
 
@@ -47,6 +59,8 @@ namespace GstCore
 			if (g_log_cb)
 			{
 				gst_debug_remove_log_function(GstLogFunc);
+				g_set_print_handler(nullptr);
+				g_set_printerr_handler(nullptr);
 				g_log_cb = nullptr;
 			}
 			gst_deinit();
@@ -76,11 +90,15 @@ namespace GstCore
 		if (g_log_cb && !Cb)
 		{
 			gst_debug_remove_log_function(GstLogFunc);
+			g_set_print_handler(nullptr);
+			g_set_printerr_handler(nullptr);
 		}
 		else if (!g_log_cb && Cb)
 		{
 			gst_debug_remove_log_function(gst_debug_log_default);
 			gst_debug_add_log_function(GstLogFunc, nullptr, nullptr);
+			g_set_print_handler(GlibPrintFunc);
+			g_set_printerr_handler(GlibPrintErrFunc);
 		}
 		g_log_cb = Cb;
 	}

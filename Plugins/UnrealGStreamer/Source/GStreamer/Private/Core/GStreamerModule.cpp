@@ -50,6 +50,10 @@ namespace
 		TEXT("gstd3dshader-1.0-0.dll"),
 		TEXT("gstd3d11-1.0-0.dll"),
 		TEXT("gstdxva-1.0-0.dll"),
+		TEXT("gstrtp-1.0-0.dll"),
+		TEXT("gstsdp-1.0-0.dll"),
+		TEXT("gstnet-1.0-0.dll"),
+		TEXT("gstriff-1.0-0.dll"),
 	};
 
 	const char* const GRequiredGstPlugins[] =

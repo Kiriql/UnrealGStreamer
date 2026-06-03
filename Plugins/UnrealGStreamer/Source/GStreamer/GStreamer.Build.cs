@@ -76,6 +76,10 @@ public class GStreamer : ModuleRules
 			"gsttag-1.0-0.dll",
 			"gstcodecparsers-1.0-0.dll",
 			"gstcodecs-1.0-0.dll",
+			"gstrtp-1.0-0.dll",
+			"gstsdp-1.0-0.dll",
+			"gstnet-1.0-0.dll",
+			"gstriff-1.0-0.dll",
 			"gstd3dshader-1.0-0.dll",
 			"gstd3d11-1.0-0.dll",
 			"gstd3d12-1.0-0.dll",
@@ -111,6 +115,10 @@ public class GStreamer : ModuleRules
 			"gstautodetect.dll",
 			"gstd3d11.dll",
 			"gstd3d12.dll",
+			"gstvideoparsersbad.dll",
+			"gstisomp4.dll",
+			"gstrtp.dll",
+			"gstudp.dll",
 		};
 		string PluginsBin = Path.Combine(BinRoot, "gstreamer-1.0");
 		foreach (string GstPlugin in GstPluginNames)
