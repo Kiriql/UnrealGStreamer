@@ -13,7 +13,7 @@ enum class EGstPipelinePreset : uint8
     Display_D3D12     UMETA(DisplayName = "Display: BGRA -> d3d12videosink"),
     H264_Fakesink     UMETA(DisplayName = "Encode: H.264 -> fakesink (benchmark)"),
     H264_FileMp4      UMETA(DisplayName = "Encode: H.264 -> MP4 file"),
-    H264_UdpRtp       UMETA(DisplayName = "Encode: H.264 -> UDP/RTP (127.0.0.1:5000)"),
+    H264_UdpRtp       UMETA(DisplayName = "Encode: H.264 -> UDP/RTP"),
 };
 
 UENUM(BlueprintType)
@@ -47,6 +47,15 @@ public:
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite,
         meta = (EditCondition = "Preset == EGstPipelinePreset::H264_FileMp4"))
     FString FileOutputPath = TEXT("ue_stream.mp4");
+
+    /** UDP destination host for H264_UdpRtp preset. Use "127.0.0.1" for loopback, the receiver's IP for LAN, or a multicast address (e.g. "239.0.0.1"). */
+    UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite,
+        meta = (EditCondition = "Preset == EGstPipelinePreset::H264_UdpRtp"))
+    FString StreamHost = TEXT("127.0.0.1");
+
+    UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite,
+        meta = (EditCondition = "Preset == EGstPipelinePreset::H264_UdpRtp", ClampMin = "1", ClampMax = "65535"))
+    int32 StreamPort = 5000;
 
     UPROPERTY(Category = "GStreamer", EditAnywhere, BlueprintReadWrite)
     bool PipelineAutostart = true;

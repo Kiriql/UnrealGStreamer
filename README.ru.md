@@ -117,7 +117,7 @@ GPU readback — это единственная причина, по котор
 | `Display: BGRA -> d3d12videosink` | `appsrc … ! videoconvert ! d3d12videosink sync=false` |
 | `Encode: H.264 -> fakesink` | `appsrc … ! d3d12upload ! d3d12h264enc name=enc ! h264parse ! fakesink sync=false` |
 | `Encode: H.264 -> MP4 file` | `… ! d3d12h264enc name=enc ! h264parse ! mp4mux ! filesink location=<FileOutputPath>` |
-| `Encode: H.264 -> UDP/RTP (127.0.0.1:5000)` | `… ! d3d12h264enc name=enc ! h264parse config-interval=1 ! rtph264pay pt=96 ! udpsink host=127.0.0.1 port=5000` |
+| `Encode: H.264 -> UDP/RTP` | `… ! d3d12h264enc name=enc ! h264parse config-interval=1 ! rtph264pay pt=96 ! udpsink host=<StreamHost> port=<StreamPort>` |
 
 > **Почему только H.264?** В upstream-плагине `d3d12` сейчас есть только H.264 encoder — элементов `d3d12h265enc` / `d3d12av1enc` в GStreamer пока нет (декодеры есть, энкодеров нет). Hardware H.265/AV1 на Windows доступен через `nvh265enc` / `mfh265enc` / `nvav1enc`, но они принимают sysmem (или D3D11) — это вынуждает GPU↔CPU readback и ломает zero-copy путь, ради которого вся история. Пресеты H.265/AV1 добавим одной строкой, когда `d3d12h265enc` / `d3d12av1enc` появятся в апстриме.
 

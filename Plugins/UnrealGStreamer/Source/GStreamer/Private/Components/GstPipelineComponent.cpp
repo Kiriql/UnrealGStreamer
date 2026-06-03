@@ -62,8 +62,8 @@ FString UGstPipelineComponent::ResolvePipelineString() const
 
     case EGstPipelinePreset::H264_UdpRtp:
         return FString::Printf(
-            TEXT("%s ! d3d12convert ! d3d12h264enc name=enc ! h264parse config-interval=1 ! rtph264pay pt=96 ! udpsink host=127.0.0.1 port=5000 sync=false"),
-            SrcLive);
+            TEXT("%s ! d3d12convert ! d3d12h264enc name=enc ! h264parse config-interval=1 ! rtph264pay pt=96 ! udpsink host=%s port=%d sync=false"),
+            SrcLive, *StreamHost, StreamPort);
 
     case EGstPipelinePreset::H264_Fakesink:
         return FString::Printf(TEXT("%s ! d3d12convert ! d3d12h264enc name=enc ! h264parse ! fakesink sync=false"), Src);
