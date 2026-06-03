@@ -18,7 +18,7 @@ public:
     virtual void Disconnect() override;
     virtual bool SetCaps(const char* CapsString) override;
     virtual bool PushBuffer(IGstAppSrcBuffer* Buffer) override;
-    virtual bool PushSharedBuffer(FGstMemoryHandle* Memory) override;
+    virtual bool PushSharedBuffer(FGstMemoryHandle* Memory, uint64_t PtsNs, uint64_t DurationNs) override;
 
 private:
     std::string m_Name;
@@ -123,7 +123,7 @@ bool FGstAppSrcImpl::PushBuffer(IGstAppSrcBuffer* Buffer)
     return true;
 }
 
-bool FGstAppSrcImpl::PushSharedBuffer(FGstMemoryHandle* Memory)
+bool FGstAppSrcImpl::PushSharedBuffer(FGstMemoryHandle* Memory, uint64_t PtsNs, uint64_t DurationNs)
 {
     GstMemory* Mem = reinterpret_cast<GstMemory*>(Memory);
     if (!m_AppSrc || !Mem)
@@ -134,6 +134,9 @@ bool FGstAppSrcImpl::PushSharedBuffer(FGstMemoryHandle* Memory)
 
     GstBuffer* BufferObj = gst_buffer_new();
     gst_buffer_append_memory(BufferObj, Mem);
+    GST_BUFFER_PTS(BufferObj) = (GstClockTime)PtsNs;
+    GST_BUFFER_DTS(BufferObj) = (GstClockTime)PtsNs;
+    GST_BUFFER_DURATION(BufferObj) = (GstClockTime)DurationNs;
 
     const GstFlowReturn Result = gst_app_src_push_buffer(GST_APP_SRC(m_AppSrc), BufferObj);
     if (Result != GST_FLOW_OK)

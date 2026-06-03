@@ -2,6 +2,7 @@
 #include "Core/GstUtils.h"
 
 #include <gst/gst.h>
+#include <gst/app/gstappsrc.h>
 
 #include <cstdio>
 #include <cstring>
@@ -21,6 +22,7 @@ public:
     virtual void Shutdown() override;
     virtual bool Start() override;
     virtual void Stop() override;
+    virtual int SendEosAndWaitDrain(int TimeoutMs) override;
 
     virtual const char* GetName() const override { return m_Name.c_str(); }
     virtual void* GetGPipeline() override { return m_Pipeline; }
@@ -94,13 +96,6 @@ bool FGstPipelineImpl::Init(const char* Name, const char* Config, char* OutErrBu
 
 void FGstPipelineImpl::Shutdown()
 {
-    if (m_Bus)
-    {
-        // Atomically detach the handler before tearing down. gst guarantees no NEW callbacks
-        // after this; set_state(NULL) below drains streaming threads so any in-flight ones drop.
-        gst_bus_set_sync_handler(m_Bus, nullptr, nullptr, nullptr);
-    }
-
     Stop();
 
     GST_RELEASE(gst_object_unref, m_Bus);
@@ -120,12 +115,72 @@ bool FGstPipelineImpl::Start()
     return true;
 }
 
+int FGstPipelineImpl::SendEosAndWaitDrain(int TimeoutMs)
+{
+    if (!m_Pipeline || !m_Bus) return -1;
+
+    // Detach sync handler — while installed, every bus message is dropped, so timed_pop below
+    // would always time out.
+    gst_bus_set_sync_handler(m_Bus, nullptr, nullptr, nullptr);
+
+    // For appsrc-fed pipelines (and especially is-live=true) downstream EOS events can be
+    // ignored. Iterate the pipeline and call gst_app_src_end_of_stream() on every appsrc.
+    int AppSrcCount = 0;
+    if (GST_IS_BIN(m_Pipeline))
+    {
+        GstIterator* It = gst_bin_iterate_recurse(GST_BIN(m_Pipeline));
+        GValue Item = G_VALUE_INIT;
+        gboolean Done = FALSE;
+        while (!Done)
+        {
+            switch (gst_iterator_next(It, &Item))
+            {
+            case GST_ITERATOR_OK:
+            {
+                GstElement* El = GST_ELEMENT(g_value_get_object(&Item));
+                if (El && GST_IS_APP_SRC(El))
+                {
+                    gst_app_src_end_of_stream(GST_APP_SRC(El));
+                    ++AppSrcCount;
+                }
+                g_value_reset(&Item);
+                break;
+            }
+            case GST_ITERATOR_RESYNC: gst_iterator_resync(It); break;
+            case GST_ITERATOR_ERROR:
+            case GST_ITERATOR_DONE:   Done = TRUE; break;
+            }
+        }
+        g_value_unset(&Item);
+        gst_iterator_free(It);
+    }
+    // Pipeline-level EOS event as belt-and-braces — some elements react to the event but
+    // not to appsrc's API call, and vice versa.
+    gst_element_send_event(m_Pipeline, gst_event_new_eos());
+
+    GstClockTime Timeout = (GstClockTime)TimeoutMs * GST_MSECOND;
+    GstMessage* Msg = gst_bus_timed_pop_filtered(
+        m_Bus, Timeout, (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
+    if (!Msg) return 0;
+
+    const int Result = (GST_MESSAGE_TYPE(Msg) == GST_MESSAGE_EOS) ? 1 : -1;
+    if (Result < 0)
+    {
+        GError* Err = nullptr;
+        gst_message_parse_error(Msg, &Err, nullptr);
+        g_printerr("[GstPipeline][%s] ERROR during EOS drain: %s\n",
+            m_Name.c_str(), Err ? Err->message : "<null>");
+        if (Err) g_error_free(Err);
+    }
+    gst_message_unref(Msg);
+    return Result;
+}
+
 void FGstPipelineImpl::Stop()
 {
-    if (m_Pipeline)
-    {
-        gst_element_set_state(m_Pipeline, GST_STATE_NULL);
-    }
+    if (!m_Pipeline) return;
+    if (m_Bus) gst_bus_set_sync_handler(m_Bus, nullptr, nullptr, nullptr);
+    gst_element_set_state(m_Pipeline, GST_STATE_NULL);
 }
 
 GstBusSyncReply FGstPipelineImpl::OnBusMessage(GstMessage* Message)

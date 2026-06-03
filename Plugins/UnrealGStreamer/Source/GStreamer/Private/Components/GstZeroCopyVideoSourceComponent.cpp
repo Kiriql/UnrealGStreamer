@@ -132,8 +132,11 @@ void UGstZeroCopyVideoSourceComponent::TickComponent(float DeltaTime, ELevelTick
     const int32 W = Width;
     const int32 H = Height;
     const uint64 FrameIndex = Metrics->FrameIdAtomic.fetch_add(1) + 1;
+    const int32 EffectiveFps = FMath::Max(1, FrameRate);
+    const uint64 FrameDurationNs = (uint64)(1000000000ULL / (uint64)EffectiveFps);
+    const uint64 FramePtsNs = (FrameIndex - 1) * FrameDurationNs;
 
-    auto FinalizeAndPush = [AppSrcCopy, MetricsCopy, FrameIndex](FRHICommandListImmediate& RHICmdList, FRHITexture* DstTexRaw)
+    auto FinalizeAndPush = [AppSrcCopy, MetricsCopy, FrameIndex, FramePtsNs, FrameDurationNs](FRHICommandListImmediate& RHICmdList, FRHITexture* DstTexRaw)
     {
         IZeroCopyBackend* Backend = IZeroCopyBackend::GetForCurrentPlatform();
         if (!Backend) return;
@@ -141,7 +144,7 @@ void UGstZeroCopyVideoSourceComponent::TickComponent(float DeltaTime, ELevelTick
         if (!GstMem) return;
 
         const double PushStart = FPlatformTime::Seconds();
-        const bool bOk = AppSrcCopy->PushSharedBuffer(GstMem);
+        const bool bOk = AppSrcCopy->PushSharedBuffer(GstMem, FramePtsNs, FrameDurationNs);
         const double PushMs = (FPlatformTime::Seconds() - PushStart) * 1000.0;
 
         if (bOk) MetricsCopy->FramesPushed.fetch_add(1);

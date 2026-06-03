@@ -4,6 +4,7 @@
 #include "Core/GStreamerLog.h"
 
 #include "GameFramework/Actor.h"
+#include "RenderingThread.h"
 
 UGstPipelineComponent::UGstPipelineComponent()
 {
@@ -35,6 +36,50 @@ void UGstPipelineComponent::ResetState()
     GstSafeDestroy(Pipeline);
 }
 
+FString UGstPipelineComponent::ResolvePipelineString() const
+{
+    // is-live=true is only meaningful for real-time streaming (UDP/RTP / live display).
+    // For file recording it causes the pipeline to use a real-time clock and changes
+    // EOS / pre-roll behavior, which breaks muxer finalization. Use a per-preset source.
+    const TCHAR* SrcLive    = TEXT("appsrc name=ueapp is-live=true format=time");
+    const TCHAR* SrcNonLive = TEXT("appsrc name=ueapp format=time");
+    const TCHAR* Src = SrcNonLive;
+
+    switch (Preset)
+    {
+    case EGstPipelinePreset::Custom:
+        return PipelineConfig;
+
+    case EGstPipelinePreset::Display_D3D12:
+        return FString::Printf(TEXT("%s ! videoconvert ! d3d12videosink sync=false"), SrcLive);
+
+    case EGstPipelinePreset::H264_UdpRtp:
+        return FString::Printf(
+            TEXT("%s ! d3d12convert ! d3d12h264enc name=enc ! h264parse config-interval=1 ! rtph264pay pt=96 ! udpsink host=127.0.0.1 port=5000 sync=false"),
+            SrcLive);
+
+    case EGstPipelinePreset::H264_Fakesink:
+        return FString::Printf(TEXT("%s ! d3d12convert ! d3d12h264enc name=enc ! h264parse ! fakesink sync=false"), Src);
+
+    case EGstPipelinePreset::H264_FileMp4:
+        return FString::Printf(
+            TEXT("%s ! d3d12convert ! d3d12h264enc name=enc ! h264parse ! mp4mux ! filesink location=\"%s\""),
+            Src, *FileOutputPath);
+
+    case EGstPipelinePreset::H265_Fakesink:
+        return FString::Printf(TEXT("%s ! d3d12convert ! d3d12h265enc name=enc ! h265parse ! fakesink sync=false"), Src);
+
+    case EGstPipelinePreset::H265_FileMp4:
+        return FString::Printf(
+            TEXT("%s ! d3d12convert ! d3d12h265enc name=enc ! h265parse ! mp4mux ! filesink location=\"%s\""),
+            Src, *FileOutputPath);
+
+    case EGstPipelinePreset::AV1_Fakesink:
+        return FString::Printf(TEXT("%s ! d3d12convert ! d3d12av1enc name=enc ! av1parse ! fakesink sync=false"), Src);
+    }
+    return PipelineConfig;
+}
+
 bool UGstPipelineComponent::StartPipeline()
 {
     if (Pipeline)
@@ -42,17 +87,22 @@ bool UGstPipelineComponent::StartPipeline()
         UE_LOG(LogGStreamer, Warning, TEXT("Pipeline '%s' already started"), *PipelineName);
         return false;
     }
-    if (PipelineConfig.IsEmpty())
+
+    const FString Resolved = ResolvePipelineString();
+    if (Resolved.IsEmpty())
     {
-        UE_LOG(LogGStreamer, Error, TEXT("Pipeline '%s' has empty PipelineConfig"), *PipelineName);
+        UE_LOG(LogGStreamer, Error, TEXT("Pipeline '%s' resolved to empty string (Preset=%d)"),
+            *PipelineName, (int32)Preset);
         return false;
     }
+
+    UE_LOG(LogGStreamer, Log, TEXT("Pipeline '%s' launching: %s"), *PipelineName, *Resolved);
 
     Pipeline = IGstPipeline::CreateInstance();
 
     char ErrBuf[512] = {0};
     const FTCHARToUTF8 NameUtf8(*PipelineName);
-    const FTCHARToUTF8 ConfigUtf8(*PipelineConfig);
+    const FTCHARToUTF8 ConfigUtf8(*Resolved);
 
     if (!Pipeline->Init(NameUtf8.Get(), ConfigUtf8.Get(), ErrBuf, sizeof(ErrBuf)))
     {
@@ -97,20 +147,43 @@ bool UGstPipelineComponent::StartPipeline()
 
 void UGstPipelineComponent::StopPipeline()
 {
-    if (Pipeline)
+    if (!Pipeline) return;
+
+    UE_LOG(LogGStreamer, Log, TEXT("Pipeline '%s' stopping (sending EOS, waiting for drain)..."), *PipelineName);
+
+    // Ensure render thread has finished pushing any in-flight buffers into appsrc before EOS,
+    // otherwise EOS races a buffer that gets dropped by appsrc-already-EOS'd.
+    FlushRenderingCommands();
+
+    const double T0 = FPlatformTime::Seconds();
+    const int DrainResult = Pipeline->SendEosAndWaitDrain(5000);
+    const double DrainMs = (FPlatformTime::Seconds() - T0) * 1000.0;
+    switch (DrainResult)
     {
-        if (AActor* Owner = GetOwner())
+    case 1:
+        UE_LOG(LogGStreamer, Log, TEXT("Pipeline '%s' EOS drained in %.0fms"), *PipelineName, DrainMs);
+        break;
+    case 0:
+        UE_LOG(LogGStreamer, Warning, TEXT("Pipeline '%s' EOS wait timed out after %.0fms — muxer output may be truncated"),
+            *PipelineName, DrainMs);
+        break;
+    default:
+        UE_LOG(LogGStreamer, Warning, TEXT("Pipeline '%s' EOS drain skipped/failed (%.0fms)"), *PipelineName, DrainMs);
+        break;
+    }
+
+    if (AActor* Owner = GetOwner())
+    {
+        TInlineComponentArray<UGstElementComponent*> Components;
+        Owner->GetComponents(Components);
+        for (UGstElementComponent* Comp : Components)
         {
-            TInlineComponentArray<UGstElementComponent*> Components;
-            Owner->GetComponents(Components);
-            for (UGstElementComponent* Comp : Components)
+            if (Comp->PipelineName == PipelineName)
             {
-                if (Comp->PipelineName == PipelineName)
-                {
-                    Comp->CbPipelineStop();
-                }
+                Comp->CbPipelineStop();
             }
         }
     }
     ResetState();
+    UE_LOG(LogGStreamer, Log, TEXT("Pipeline '%s' stopped"), *PipelineName);
 }

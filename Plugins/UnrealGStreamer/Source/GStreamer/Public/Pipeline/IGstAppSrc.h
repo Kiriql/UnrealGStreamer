@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 #include "Core/GstMemoryHandle.h"
 
@@ -27,7 +28,8 @@ public:
 	virtual void Disconnect() = 0;
 	virtual bool SetCaps(const char* CapsString) = 0;
 	virtual bool PushBuffer(IGstAppSrcBuffer* Buffer) = 0;
-	virtual bool PushSharedBuffer(FGstMemoryHandle* Memory) = 0;
+	/** PtsNs / DurationNs are GST_CLOCK_TIME-style nanoseconds; required for muxers (mp4mux etc). */
+	virtual bool PushSharedBuffer(FGstMemoryHandle* Memory, uint64_t PtsNs, uint64_t DurationNs) = 0;
 
 protected:
 	IGstAppSrc() {}
